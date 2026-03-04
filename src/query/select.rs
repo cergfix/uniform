@@ -149,9 +149,7 @@ fn select_peek(
 ) -> Vec<OwnedRow> {
     let candidates: Vec<u64> = match plan {
         QueryPlan::IndexScan {
-            index_name,
-            value,
-            ..
+            index_name, value, ..
         } => {
             if let Some(idx) = table.indexes.get(index_name) {
                 let mut seq_ids = idx.find_eq(value);
@@ -179,10 +177,10 @@ fn select_peek(
             }
 
             if let Some(where_str) = where_clause {
-                if !matches!(plan, QueryPlan::IndexScan { .. }) || plan.has_residual() {
-                    if !condition::row_meets_conditions_simple(where_str, &row.columns) {
-                        continue;
-                    }
+                if (!matches!(plan, QueryPlan::IndexScan { .. }) || plan.has_residual())
+                    && !condition::row_meets_conditions_simple(where_str, &row.columns)
+                {
+                    continue;
                 }
             }
 
@@ -202,12 +200,15 @@ fn select_pop(
     limit: usize,
     order: &QueueOrder,
 ) -> Vec<OwnedRow> {
+    // Fast path: FullScan + no WHERE → iterate SkipMap directly (O(1) per row)
+    if matches!(plan, QueryPlan::FullScan) && where_clause.is_none() {
+        return select_pop_direct(table, limit, order);
+    }
+
     // Step 1: Get candidate seq_ids — respects FIFO/LIFO queue ordering
     let candidates: Vec<u64> = match plan {
         QueryPlan::IndexScan {
-            index_name,
-            value,
-            ..
+            index_name, value, ..
         } => {
             if let Some(idx) = table.indexes.get(index_name) {
                 let mut seq_ids = idx.find_eq(value);
@@ -240,12 +241,10 @@ fn select_pop(
 
             // Evaluate WHERE residual (if not covered by index)
             if let Some(where_str) = where_clause {
-                if !matches!(plan, QueryPlan::IndexScan { .. })
-                    || plan.has_residual()
+                if (!matches!(plan, QueryPlan::IndexScan { .. }) || plan.has_residual())
+                    && !condition::row_meets_conditions_simple(where_str, &row.columns)
                 {
-                    if !condition::row_meets_conditions_simple(where_str, &row.columns) {
-                        continue;
-                    }
+                    continue;
                 }
             }
 
@@ -269,7 +268,58 @@ fn select_pop(
     result
 }
 
+/// Fast-path pop: iterate SkipMap front/back directly without collecting seq_ids.
+fn select_pop_direct(table: &Table, limit: usize, order: &QueueOrder) -> Vec<OwnedRow> {
+    let mut result = Vec::new();
+
+    match order {
+        QueueOrder::Fifo | QueueOrder::Priority { .. } => {
+            // Iterate forward from front
+            for entry in table.rows.iter() {
+                if result.len() >= limit {
+                    break;
+                }
+                let row = entry.value();
+                if row.is_claimed() {
+                    continue;
+                }
+                if row.try_claim() {
+                    result.push(row.to_owned_row());
+                    table.row_count.fetch_sub(1, Ordering::Relaxed);
+                }
+            }
+        }
+        QueueOrder::Lifo => {
+            // Iterate backward from back
+            let mut current = table.rows.back();
+            while let Some(entry) = current {
+                if result.len() >= limit {
+                    break;
+                }
+                let row = entry.value();
+                if row.is_claimed() {
+                    current = entry.prev();
+                    continue;
+                }
+                if row.try_claim() {
+                    result.push(row.to_owned_row());
+                    table.row_count.fetch_sub(1, Ordering::Relaxed);
+                }
+                current = entry.prev();
+            }
+        }
+    }
+
+    if !result.is_empty() {
+        let claimed_ids: Vec<u64> = result.iter().map(|r| r.seq_id).collect();
+        table.remove_claimed_rows(&claimed_ids);
+    }
+
+    result
+}
+
 /// Extract SELECT components from a parsed SQL statement.
+#[allow(clippy::type_complexity)]
 fn extract_select_parts(
     stmt: &sqlparser::ast::Statement,
 ) -> Result<(String, Option<String>, i64, i64, Vec<String>), String> {
@@ -288,10 +338,7 @@ fn extract_select_parts(
                     };
 
                     // WHERE clause (as string for now — we'll use the original)
-                    let where_clause = select
-                        .selection
-                        .as_ref()
-                        .map(|expr| format!("{}", expr));
+                    let where_clause = select.selection.as_ref().map(|expr| format!("{}", expr));
 
                     // Selected columns
                     let select_columns: Vec<String> = select
@@ -335,9 +382,12 @@ fn extract_select_parts(
 
 fn extract_table_name(table_factor: &sqlparser::ast::TableFactor) -> String {
     match table_factor {
-        sqlparser::ast::TableFactor::Table { name, .. } => {
-            name.0.iter().map(|i| i.value.clone()).collect::<Vec<_>>().join(".")
-        }
+        sqlparser::ast::TableFactor::Table { name, .. } => name
+            .0
+            .iter()
+            .map(|i| i.value.clone())
+            .collect::<Vec<_>>()
+            .join("."),
         _ => String::new(),
     }
 }

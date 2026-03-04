@@ -17,6 +17,7 @@ pub struct PushToFileWorker {
 }
 
 impl PushToFileWorker {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: String,
         table: String,
@@ -116,9 +117,7 @@ impl WorkerLoop for PushToFileWorker {
         if logging::get_log_level() >= logging::LOG_LEVEL_DEBUG {
             logging::log(&format!(
                 "WORKER {}: wrote {} rows to {}",
-                self.config.name,
-                row_count,
-                full_path
+                self.config.name, row_count, full_path
             ));
         }
 

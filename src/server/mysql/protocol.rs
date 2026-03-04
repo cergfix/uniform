@@ -12,7 +12,8 @@ pub async fn read_packet(stream: &mut TcpStream) -> Result<(u8, Vec<u8>), String
         .await
         .map_err(|e| format!("read header: {}", e))?;
 
-    let payload_len = (header[0] as usize) | ((header[1] as usize) << 8) | ((header[2] as usize) << 16);
+    let payload_len =
+        (header[0] as usize) | ((header[1] as usize) << 8) | ((header[2] as usize) << 16);
     let seq_id = header[3];
 
     let mut payload = vec![0u8; payload_len];
@@ -27,7 +28,11 @@ pub async fn read_packet(stream: &mut TcpStream) -> Result<(u8, Vec<u8>), String
 }
 
 /// Write a MySQL packet to the stream.
-pub async fn write_packet(stream: &mut TcpStream, seq_id: u8, payload: &[u8]) -> Result<(), String> {
+pub async fn write_packet(
+    stream: &mut TcpStream,
+    seq_id: u8,
+    payload: &[u8],
+) -> Result<(), String> {
     let len = payload.len();
     let header = [
         (len & 0xff) as u8,
@@ -43,11 +48,17 @@ pub async fn write_packet(stream: &mut TcpStream, seq_id: u8, payload: &[u8]) ->
         .write_all(payload)
         .await
         .map_err(|e| format!("write payload: {}", e))?;
-    stream
-        .flush()
-        .await
-        .map_err(|e| format!("flush: {}", e))?;
     Ok(())
+}
+
+/// Append a MySQL packet (4-byte header + payload) to an in-memory buffer.
+pub fn append_packet(buf: &mut Vec<u8>, seq_id: u8, payload: &[u8]) {
+    let len = payload.len();
+    buf.push((len & 0xff) as u8);
+    buf.push(((len >> 8) & 0xff) as u8);
+    buf.push(((len >> 16) & 0xff) as u8);
+    buf.push(seq_id);
+    buf.extend_from_slice(payload);
 }
 
 /// Build the initial handshake packet (sent by server to client).
@@ -93,7 +104,9 @@ pub fn build_handshake(connection_id: u32) -> Vec<u8> {
     buf.extend_from_slice(&[0; 10]);
 
     // Auth data part 2 (13 bytes, including null terminator)
-    buf.extend_from_slice(&[0x5a, 0x6b, 0x2c, 0x3d, 0x4e, 0x5f, 0x60, 0x71, 0x12, 0x23, 0x34, 0x45, 0x00]);
+    buf.extend_from_slice(&[
+        0x5a, 0x6b, 0x2c, 0x3d, 0x4e, 0x5f, 0x60, 0x71, 0x12, 0x23, 0x34, 0x45, 0x00,
+    ]);
 
     // Auth plugin name (null-terminated)
     buf.extend_from_slice(MYSQL_NATIVE_PASSWORD.as_bytes());
@@ -119,30 +132,26 @@ pub fn build_ok_packet(affected_rows: u64, last_insert_id: u64) -> Vec<u8> {
 
 /// Build an ERR packet.
 pub fn build_err_packet(error_code: u16, message: &str) -> Vec<u8> {
-    let mut buf = Vec::new();
-    buf.push(ERR_HEADER);
-    buf.push((error_code & 0xff) as u8);
-    buf.push(((error_code >> 8) & 0xff) as u8);
-    // SQL state marker
-    buf.push(b'#');
-    // SQL state (5 chars)
+    let mut buf = vec![
+        ERR_HEADER,
+        (error_code & 0xff) as u8,
+        ((error_code >> 8) & 0xff) as u8,
+        b'#',
+    ];
     buf.extend_from_slice(b"HY000");
-    // Error message
     buf.extend_from_slice(message.as_bytes());
     buf
 }
 
 /// Build an EOF packet.
 pub fn build_eof_packet() -> Vec<u8> {
-    let mut buf = Vec::new();
-    buf.push(EOF_HEADER);
-    // Warnings (2 bytes)
-    buf.push(0);
-    buf.push(0);
-    // Status flags (2 bytes)
-    buf.push((SERVER_STATUS_AUTOCOMMIT & 0xff) as u8);
-    buf.push(((SERVER_STATUS_AUTOCOMMIT >> 8) & 0xff) as u8);
-    buf
+    vec![
+        EOF_HEADER,
+        0,
+        0,
+        (SERVER_STATUS_AUTOCOMMIT & 0xff) as u8,
+        ((SERVER_STATUS_AUTOCOMMIT >> 8) & 0xff) as u8,
+    ]
 }
 
 /// Write a length-encoded integer.

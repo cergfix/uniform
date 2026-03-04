@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use crate::config::vars;
 use crate::query::command::{self, Command};
-use crate::store::registry::{self, Server};
 use crate::server::connection::Connection;
+use crate::store::registry::{self, Server};
 use crate::types::query_response::{QueryResponse, QueryType};
 use crate::types::row::OwnedRow;
 use crate::types::value::Value;
@@ -33,9 +33,9 @@ pub fn run_query(
         if let Some(json_str) = meta_json {
             match serde_json::from_str::<serde_json::Value>(&json_str) {
                 Ok(serde_json::Value::Object(map)) => {
-                    // Preserve Fb_id and Fb_created
-                    let fb_id = metadata.columns.get("Fb_id").cloned();
-                    let fb_created = metadata.columns.get("Fb_created").cloned();
+                    // Preserve u_id and u_created_at
+                    let row_id = metadata.columns.get("u_id").cloned();
+                    let row_created = metadata.columns.get("u_created_at").cloned();
 
                     for (key, val) in map {
                         match &val {
@@ -53,11 +53,11 @@ pub fn run_query(
                         }
                     }
 
-                    if let Some(id) = fb_id {
-                        metadata.columns.insert("Fb_id".into(), id);
+                    if let Some(id) = row_id {
+                        metadata.columns.insert("u_id".into(), id);
                     }
-                    if let Some(created) = fb_created {
-                        metadata.columns.insert("Fb_created".into(), created);
+                    if let Some(created) = row_created {
+                        metadata.columns.insert("u_created_at".into(), created);
                     }
                 }
                 Ok(_) => {
@@ -103,18 +103,32 @@ pub fn run_query(
         Command::RPush { table, data } => handle_rpush(&table, &data, metadata, conn),
         Command::RPop { table } => handle_rpop(&table, server, metadata, conn),
 
-        Command::CreateTable { name, options } => crate::query::create::create_table_cmd(&name, &options),
-        Command::CreateIndex { name, options } => crate::query::create::create_index_cmd(&name, &options),
-        Command::CreateServer { protocol, name, options } => {
-            crate::query::create::create_server_cmd(protocol, &name, &options)
+        Command::CreateTable { name, options } => {
+            crate::query::create::create_table_cmd(&name, &options)
         }
-        Command::CreateProc { proc_type, name, options } => {
-            crate::query::create::create_proc_cmd(proc_type, &name, &options)
+        Command::CreateIndex { name, options } => {
+            crate::query::create::create_index_cmd(&name, &options)
         }
+        Command::CreateServer {
+            protocol,
+            name,
+            options,
+        } => crate::query::create::create_server_cmd(protocol, &name, &options),
+        Command::CreateProc {
+            proc_type,
+            name,
+            options,
+        } => crate::query::create::create_proc_cmd(proc_type, &name, &options),
 
-        Command::AlterTable { name, options } => crate::query::alter::alter_table_cmd(&name, &options),
-        Command::AlterServer { name, options } => crate::query::alter::alter_server_cmd(&name, &options),
-        Command::AlterProc { name, options } => crate::query::alter::alter_proc_cmd(&name, &options),
+        Command::AlterTable { name, options } => {
+            crate::query::alter::alter_table_cmd(&name, &options)
+        }
+        Command::AlterServer { name, options } => {
+            crate::query::alter::alter_server_cmd(&name, &options)
+        }
+        Command::AlterProc { name, options } => {
+            crate::query::alter::alter_proc_cmd(&name, &options)
+        }
 
         Command::DropTable { name } => crate::query::drop::drop_table_cmd(&name),
         Command::DropIndex { name } => crate::query::drop::drop_index_cmd(&name),
@@ -123,9 +137,11 @@ pub fn run_query(
         Command::DropWorker { name } => crate::query::drop::drop_worker_cmd(&name),
         Command::DropConnection { addr } => crate::query::drop::drop_connection_cmd(&addr),
 
-        Command::StartWorker { class, name, options } => {
-            crate::query::create::start_worker_cmd(class, &name, &options)
-        }
+        Command::StartWorker {
+            class,
+            name,
+            options,
+        } => crate::query::create::start_worker_cmd(class, &name, &options),
 
         Command::Show { what, filter } => crate::query::show::show_cmd(&what, filter.as_ref()),
         Command::Set { key, value } => crate::query::set::set_cmd(&key, &value),
@@ -193,7 +209,14 @@ fn handle_select(
         (-1, -1, 0)
     };
 
-    match crate::query::select::sql_select(query, force_limit, force_offset, max_scan_time_ms, metadata, conn) {
+    match crate::query::select::sql_select(
+        query,
+        force_limit,
+        force_offset,
+        max_scan_time_ms,
+        metadata,
+        conn,
+    ) {
         Ok(rows) => QueryResponse::ok_result(rows),
         Err(e) => QueryResponse::err_typed(QueryType::Result, e),
     }
@@ -266,12 +289,31 @@ fn handle_rpush(
 
 fn handle_rpop(
     table: &str,
-    server: Option<&Arc<Server>>,
-    metadata: &OwnedRow,
-    conn: Option<&Connection>,
+    _server: Option<&Arc<Server>>,
+    _metadata: &OwnedRow,
+    _conn: Option<&Connection>,
 ) -> QueryResponse {
-    let q = format!("SELECT * FROM `{}` LIMIT 1", table);
-    handle_select(&q, server, metadata, conn)
+    match registry::get_table(table) {
+        Some(t) => match t.pop_one() {
+            Some(row) => QueryResponse {
+                success: true,
+                query_type: QueryType::Result,
+                result: vec![row],
+                value_int: 1,
+                affected_rows: 1,
+                ..QueryResponse::new()
+            },
+            None => QueryResponse {
+                success: true,
+                query_type: QueryType::Result,
+                result: vec![],
+                ..QueryResponse::new()
+            },
+        },
+        None => {
+            QueryResponse::err_typed(QueryType::Result, format!("Table doesn't exist: {}", table))
+        }
+    }
 }
 
 fn handle_llen(table_name: &str) -> QueryResponse {

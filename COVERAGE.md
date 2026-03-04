@@ -1,21 +1,32 @@
 # Test Coverage Report
 
 **Date:** 2026-03-02
-**Codebase:** 9,036 lines of Rust across 56 source files
-**Tests:** 0
-**Coverage:** 0%
+**Codebase:** ~9,000 lines of Rust across 56 source files
+**Unit tests:** 0
+**Integration tests:** 47 (`tests/integration.py`)
 
 ---
 
 ## Current State
 
-The codebase has **zero tests**. All 56 source files contain only production code with no `#[cfg(test)]` modules or `#[test]` functions.
+The Rust source files contain no `#[cfg(test)]` modules or `#[test]` functions.
 
 ```
 running 0 tests  (lib)
 running 0 tests  (bin)
 running 0 tests  (doc-tests)
 ```
+
+There are **47 integration tests** in `tests/integration.py` that exercise the compiled binary end-to-end via Redis, MySQL, HTTP, and FastCGI protocols. These run in CI on both x86_64 and aarch64 Linux using Docker Compose for external services (MySQL, php-fpm, nginx).
+
+There is also a **load test** (`tests/load_test.py`) that benchmarks Uniform against real Redis 7 and MySQL 8.4 (MEMORY engine) using Docker Compose (`tests/docker-compose.load.yml`):
+
+| Benchmark | Uniform Protocol | Baseline | Workload |
+|-----------|-----------------|----------|----------|
+| Redis | RPUSH/RPOP (port 6393) | Redis 7 (port 6394) | 100k rows, 10k batch via redis-cli |
+| MySQL | SELECT pop (port 6395) | MySQL 8.4 MEMORY (port 3307) | 100k rows, INSERT batches of 1k rows, SELECT+DELETE in batches of 100 |
+
+The MySQL benchmark uses `BEGIN; SELECT ... FOR UPDATE LIMIT 1; DELETE ...; COMMIT` on real MySQL to simulate Uniform's atomic destructive SELECT. Load tests print comparison tables and soft-baseline warnings but never fail CI.
 
 ---
 
@@ -118,7 +129,7 @@ Target: ~80 functions, ~2,200 lines. Estimated: **~150 test cases.**
 | # | Module | Test Cases | What to Test |
 |---|--------|-----------|--------------|
 | 1 | `types/value.rs` | ~25 | Accessors (as_str, as_f64, as_bool, is_null), to_string_repr (integers vs floats), to_f64 coercions, Ord (Null < Bool < Number < String, within-type ordering), Hash consistency, Display, From conversions (str, String, f64, i64, i32, bool, serde_json::Value) |
-| 2 | `types/row.rs` | ~15 | OwnedRow::new (auto Fb_id/Fb_created), filter_keys (keep/remove), patch (merge), to_json (roundtrip), get/get_str/get_f64, copy_row (deep clone independence), Row CAS claiming (try_claim race) |
+| 2 | `types/row.rs` | ~15 | OwnedRow::new (auto u_id/u_created_at), filter_keys (keep/remove), patch (merge), to_json (roundtrip), get/get_str/get_f64, copy_row (deep clone independence), Row CAS claiming (try_claim race) |
 | 3 | `store/table.rs` | ~20 | insert (basic, capacity enforcement, unique index violation), pop_one FIFO/LIFO ordering, CAS contention (two threads competing), remove_claimed_rows cleanup, len/is_empty, add_index (indexes existing rows), capacity_str |
 | 4 | `store/index.rs` | ~20 | insert/remove, find_eq (exact match), find_range, find_gt/gte/lt/lte, has_live_entry (with mock predicate), empty index queries, multi-value same column, composite key ordering |
 | 5 | `query/command.rs` | ~25 | parse_command: SELECT, INSERT, RPUSH, RPOP, CREATE TABLE/SERVER/PROC/INDEX, START WORKER, DROP, ALTER, SHOW, SET, SLEEP, NSLEEP, PING, QUIT, EXIT, SHUTDOWN, VERSION, LLEN, METADATA, unknown commands. strip_metadata extraction. strip_comments removal |

@@ -45,6 +45,7 @@ pub async fn run_buffer_appl(worker: Arc<BufferApplWorker>) {
     let config = &worker.config;
     let mut runs: i64 = 0;
     let mut terminator = config.terminator.clone();
+    let mut prev_time: Option<chrono::DateTime<chrono::Utc>> = None;
 
     loop {
         if *terminator.borrow() {
@@ -61,22 +62,39 @@ pub async fn run_buffer_appl(worker: Arc<BufferApplWorker>) {
                 let mut rx_guard = rx.lock().await;
                 match rx_guard.try_recv() {
                     Ok(mut row) => {
-                        // Apply time dilation if configured
-                        if worker.time_dilation > 0.0 && worker.time_dilation != 1.0 {
-                            // Adjust timing based on dilation factor
-                            // time_dilation > 1 = slow down, < 1 = speed up
+                        // Apply time dilation: scale inter-row delay by dilation percentage.
+                        // time_dilation is a percentage (100 = realtime, 50 = 2x faster, 200 = 2x slower).
+                        if worker.time_dilation > 0.0 {
+                            if let Some(crate::types::value::Value::String(ts)) =
+                                row.columns.get("u_created_at")
+                            {
+                                if let Ok(created) = chrono::DateTime::parse_from_rfc3339(ts) {
+                                    let created_utc = created.with_timezone(&chrono::Utc);
+                                    if let Some(prev) = prev_time {
+                                        let gap = created_utc
+                                            .signed_duration_since(prev)
+                                            .num_milliseconds()
+                                            .max(0)
+                                            as f64;
+                                        let scaled_ms = (gap / worker.time_dilation * 100.0) as u64;
+                                        if scaled_ms > 0 {
+                                            tokio::time::sleep(Duration::from_millis(scaled_ms))
+                                                .await;
+                                        }
+                                    }
+                                    prev_time = Some(created_utc);
+                                }
+                            }
                         }
 
                         let metadata = OwnedRow::new();
                         let (ok, err, _, _) =
                             insert_pipeline::insert(&config.table, &mut row, &metadata, true, None);
-                        if !ok {
-                            if logging::get_log_level() >= logging::LOG_LEVEL_ERROR {
-                                logging::log(&format!(
-                                    "WORKER {}: buffer_appl insert error: {}",
-                                    config.name, err
-                                ));
-                            }
+                        if !ok && logging::get_log_level() >= logging::LOG_LEVEL_ERROR {
+                            logging::log(&format!(
+                                "WORKER {}: buffer_appl insert error: {}",
+                                config.name, err
+                            ));
                         }
                         runs += 1;
                     }

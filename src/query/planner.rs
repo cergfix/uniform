@@ -49,12 +49,10 @@ pub fn plan_query(where_clause: &Option<String>, table: &Table) -> QueryPlan {
     };
 
     let expr = match ast.first() {
-        Some(sqlparser::ast::Statement::Query(q)) => {
-            match q.body.as_ref() {
-                sqlparser::ast::SetExpr::Select(s) => s.selection.clone(),
-                _ => None,
-            }
-        }
+        Some(sqlparser::ast::Statement::Query(q)) => match q.body.as_ref() {
+            sqlparser::ast::SetExpr::Select(s) => s.selection.clone(),
+            _ => None,
+        },
         _ => None,
     };
 
@@ -78,16 +76,14 @@ pub fn plan_query(where_clause: &Option<String>, table: &Table) -> QueryPlan {
                     Some(QueryPlan::IndexScan { index_name, .. }) => {
                         // Prefer unique indexes
                         let current_idx = table.indexes.get(index_name);
-                        let current_unique =
-                            current_idx.map(|i| i.unique).unwrap_or(false);
+                        let current_unique = current_idx.map(|i| i.unique).unwrap_or(false);
                         idx.unique && !current_unique
                     }
                     _ => true,
                 };
 
                 if is_better {
-                    let has_residual = predicates.len() > 1
-                        || has_non_equality_conditions(&expr);
+                    let has_residual = predicates.len() > 1 || has_non_equality_conditions(&expr);
                     best_plan = Some(QueryPlan::IndexScan {
                         index_name: idx_name.clone(),
                         value: val.clone(),
@@ -108,12 +104,20 @@ fn extract_equality_predicates(expr: &sqlparser::ast::Expr) -> Vec<(String, Valu
     let mut result = Vec::new();
 
     match expr {
-        Expr::BinaryOp { left, op: BinaryOperator::Eq, right } => {
+        Expr::BinaryOp {
+            left,
+            op: BinaryOperator::Eq,
+            right,
+        } => {
             if let Some((col, val)) = extract_column_value_pair(left, right) {
                 result.push((col, val));
             }
         }
-        Expr::BinaryOp { left, op: BinaryOperator::And, right } => {
+        Expr::BinaryOp {
+            left,
+            op: BinaryOperator::And,
+            right,
+        } => {
             result.extend(extract_equality_predicates(left));
             result.extend(extract_equality_predicates(right));
         }
@@ -152,15 +156,9 @@ fn extract_column_value_pair(
 fn expr_to_value(expr: &sqlparser::ast::Expr) -> Option<Value> {
     match expr {
         sqlparser::ast::Expr::Value(v) => match v {
-            sqlparser::ast::Value::Number(n, _) => {
-                n.parse::<f64>().ok().map(Value::Number)
-            }
-            sqlparser::ast::Value::SingleQuotedString(s) => {
-                Some(Value::String(s.clone()))
-            }
-            sqlparser::ast::Value::DoubleQuotedString(s) => {
-                Some(Value::String(s.clone()))
-            }
+            sqlparser::ast::Value::Number(n, _) => n.parse::<f64>().ok().map(Value::Number),
+            sqlparser::ast::Value::SingleQuotedString(s) => Some(Value::String(s.clone())),
+            sqlparser::ast::Value::DoubleQuotedString(s) => Some(Value::String(s.clone())),
             sqlparser::ast::Value::Boolean(b) => Some(Value::Bool(*b)),
             sqlparser::ast::Value::Null => Some(Value::Null),
             _ => None,
@@ -174,7 +172,9 @@ fn has_non_equality_conditions(expr: &sqlparser::ast::Expr) -> bool {
     use sqlparser::ast::{BinaryOperator, Expr};
 
     match expr {
-        Expr::BinaryOp { op, left, right, .. } => match op {
+        Expr::BinaryOp {
+            op, left, right, ..
+        } => match op {
             BinaryOperator::And | BinaryOperator::Or => {
                 has_non_equality_conditions(left) || has_non_equality_conditions(right)
             }

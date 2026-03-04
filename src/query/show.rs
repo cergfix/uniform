@@ -56,14 +56,17 @@ fn show_tables() -> Vec<OwnedRow> {
             .insert("ForceLimit".into(), Value::Number(t.force_limit as f64));
         row.columns
             .insert("ForceOffset".into(), Value::Number(t.force_offset as f64));
-        row.columns
-            .insert("MaxScanTimeMs".into(), Value::Number(t.max_scan_time_ms as f64));
-        row.columns
-            .insert("LongPollMaxClients".into(), Value::Number(t.long_poll_max_clients as f64));
+        row.columns.insert(
+            "MaxScanTimeMs".into(),
+            Value::Number(t.max_scan_time_ms as f64),
+        );
+        row.columns.insert(
+            "LongPollMaxClients".into(),
+            Value::Number(t.long_poll_max_clients as f64),
+        );
         row.columns
             .insert("BufferSize".into(), Value::Number(t.buffer_max_size as f64));
-        row.columns
-            .insert("Silent".into(), Value::Bool(t.silent));
+        row.columns.insert("Silent".into(), Value::Bool(t.silent));
         row.columns
             .insert("Indexes".into(), Value::Number(t.indexes.len() as f64));
         rows.push(row);
@@ -78,8 +81,10 @@ fn show_servers() -> Vec<OwnedRow> {
         let mut row = OwnedRow::new();
         row.columns
             .insert("Name".into(), Value::String(s.name.clone()));
-        row.columns
-            .insert("Protocol".into(), Value::String(s.protocol.as_str().to_string()));
+        row.columns.insert(
+            "Protocol".into(),
+            Value::String(s.protocol.as_str().to_string()),
+        );
         row.columns
             .insert("Bind".into(), Value::String(s.bind.clone()));
         row.columns.insert(
@@ -94,8 +99,10 @@ fn show_servers() -> Vec<OwnedRow> {
             .insert("ForceLimit".into(), Value::Number(s.force_limit as f64));
         row.columns
             .insert("ForceOffset".into(), Value::Number(s.force_offset as f64));
-        row.columns
-            .insert("MaxScanTimeMs".into(), Value::Number(s.max_scan_time_ms as f64));
+        row.columns.insert(
+            "MaxScanTimeMs".into(),
+            Value::Number(s.max_scan_time_ms as f64),
+        );
         row.columns
             .insert("LatencyTargetMs".into(), Value::Number(s.latency_target_ms));
         row.columns
@@ -130,18 +137,21 @@ fn show_procs() -> Vec<OwnedRow> {
         let mut row = OwnedRow::new();
         row.columns
             .insert("Name".into(), Value::String(p.name.clone()));
-        row.columns
-            .insert("Type".into(), Value::String(p.proc_type.as_str().to_string()));
+        row.columns.insert(
+            "Type".into(),
+            Value::String(p.proc_type.as_str().to_string()),
+        );
         row.columns
             .insert("Src".into(), Value::String(p.src.clone()));
         row.columns
             .insert("Dest".into(), Value::String(p.dest.clone()));
         row.columns
             .insert("Table".into(), Value::String(p.table.clone()));
-        row.columns
-            .insert("Enabled".into(), Value::Bool(p.enabled));
-        row.columns
-            .insert("CaseQuery".into(), Value::String(p.case_query_string.clone()));
+        row.columns.insert("Enabled".into(), Value::Bool(p.enabled));
+        row.columns.insert(
+            "CaseQuery".into(),
+            Value::String(p.case_query_string.clone()),
+        );
         row.columns
             .insert("Patch".into(), Value::String(p.patch_string.clone()));
         row.columns
@@ -154,8 +164,37 @@ fn show_procs() -> Vec<OwnedRow> {
 }
 
 fn show_connections() -> Vec<OwnedRow> {
-    // TODO: iterate over all server connections
-    Vec::new()
+    let mut rows = Vec::new();
+    for server_entry in SERVERS.iter() {
+        let s = server_entry.value();
+        for conn_entry in s.connections.iter() {
+            if let Ok(c) = conn_entry.value().try_lock() {
+                let mut row = OwnedRow::new();
+                row.columns
+                    .insert("Server".into(), Value::String(s.name.clone()));
+                row.columns
+                    .insert("RemoteAddr".into(), Value::String(c.remote_addr.clone()));
+                row.columns
+                    .insert("LocalAddr".into(), Value::String(c.local_addr.clone()));
+                row.columns.insert(
+                    "Protocol".into(),
+                    Value::String(s.protocol.as_str().to_string()),
+                );
+                row.columns
+                    .insert("Created".into(), Value::String(c.created.to_rfc3339()));
+                row.columns.insert(
+                    "LastActivity".into(),
+                    Value::String(c.last_activity.to_rfc3339()),
+                );
+                row.columns
+                    .insert("State".into(), Value::String(c.state_text.clone()));
+                row.columns
+                    .insert("Query".into(), Value::String(c.query.clone()));
+                rows.push(row);
+            }
+        }
+    }
+    rows
 }
 
 fn show_variables() -> Vec<OwnedRow> {
@@ -172,7 +211,10 @@ fn show_variables() -> Vec<OwnedRow> {
             }),
         ),
         ("LOG_DEST", Value::String(logging::get_log_dest())),
-        ("ROLE", Value::String(crate::util::cluster::get_cluster_role())),
+        (
+            "ROLE",
+            Value::String(crate::util::cluster::get_cluster_role()),
+        ),
         (
             "WORKERS_FORCE_SHUTDOWN",
             Value::String(if vars::workers_force_shutdown() {
@@ -214,8 +256,7 @@ fn show_indexes() -> Vec<OwnedRow> {
                 .insert("Table".into(), Value::String(t.name.clone()));
             row.columns
                 .insert("Column".into(), Value::String(idx.column.clone()));
-            row.columns
-                .insert("Unique".into(), Value::Bool(idx.unique));
+            row.columns.insert("Unique".into(), Value::Bool(idx.unique));
             row.columns
                 .insert("Entries".into(), Value::Number(idx.len() as f64));
             rows.push(row);
@@ -226,10 +267,8 @@ fn show_indexes() -> Vec<OwnedRow> {
 
 fn show_role() -> Vec<OwnedRow> {
     let mut row = OwnedRow::new();
-    row.columns.insert(
-        "Variable_name".into(),
-        Value::String("ROLE".into()),
-    );
+    row.columns
+        .insert("Variable_name".into(), Value::String("ROLE".into()));
     row.columns.insert(
         "Value".into(),
         Value::String(crate::util::cluster::get_cluster_role()),
@@ -238,13 +277,8 @@ fn show_role() -> Vec<OwnedRow> {
 }
 
 fn show_legal() -> Vec<OwnedRow> {
-    let items: Vec<(&str, &str)> = vec![
-        ("VERSION", vars::version()),
-        ("COPYRIGHT", vars::COPYRIGHT),
-        ("CONTACT", vars::CONTACT),
-        ("WEB_URL", vars::WEB_URL),
-        ("KNOWLEDGE_BASE_URL", vars::KNOWLEDGE_BASE_URL),
-    ];
+    let items: Vec<(&str, &str)> =
+        vec![("VERSION", vars::version()), ("COPYRIGHT", vars::COPYRIGHT)];
     items
         .into_iter()
         .map(|(name, value)| {

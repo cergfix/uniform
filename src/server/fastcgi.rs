@@ -3,6 +3,8 @@ use std::sync::Arc;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio::sync::Mutex;
 
 use crate::query::insert_pipeline;
 use crate::server::connection::Connection;
@@ -108,19 +110,27 @@ fn read_fcgi_length(data: &[u8], pos: usize) -> (usize, usize) {
 }
 
 /// Handle a FastCGI connection.
-pub async fn handle_connection(server: Arc<Server>, mut conn: Connection) {
+pub async fn handle_connection(server: Arc<Server>, conn: Arc<Mutex<Connection>>) {
     let mut header_buf = [0u8; FCGI_HEADER_LEN];
     let mut params_data: Vec<u8> = Vec::new();
     let mut stdin_data: Vec<u8> = Vec::new();
     let mut request_id: u16 = 0;
     let mut keep_conn = false;
 
-    loop {
-        if server.is_shutting_down() || conn.terminated {
-            break;
-        }
+    // Clone stream Arc once for all I/O
+    let stream_arc = {
+        let c = conn.lock().await;
+        c.get_stream().clone()
+    };
 
-        conn.state_text = "READ_FCGI".to_string();
+    loop {
+        {
+            let mut c = conn.lock().await;
+            if server.is_shutting_down() || c.terminated {
+                break;
+            }
+            c.state_text = "READ_FCGI".to_string();
+        }
 
         // Reset for new request
         params_data.clear();
@@ -128,12 +138,13 @@ pub async fn handle_connection(server: Arc<Server>, mut conn: Connection) {
         let mut got_begin = false;
         let mut params_done = false;
         let mut stdin_done = false;
+        let mut terminated = false;
 
         // Read records until we have a complete request
         loop {
             // Read header
             let n = {
-                let mut stream = conn.get_stream().lock().await;
+                let mut stream = stream_arc.lock().await;
                 match stream.read_exact(&mut header_buf).await {
                     Ok(_) => FCGI_HEADER_LEN,
                     Err(_) => 0,
@@ -141,7 +152,7 @@ pub async fn handle_connection(server: Arc<Server>, mut conn: Connection) {
             };
 
             if n == 0 {
-                conn.terminated = true;
+                terminated = true;
                 break;
             }
 
@@ -155,7 +166,7 @@ pub async fn handle_connection(server: Arc<Server>, mut conn: Connection) {
                         header.version
                     ));
                 }
-                conn.terminated = true;
+                terminated = true;
                 break;
             }
 
@@ -164,11 +175,11 @@ pub async fn handle_connection(server: Arc<Server>, mut conn: Connection) {
             let mut content = vec![0u8; total_len];
             if total_len > 0 {
                 let read_ok = {
-                    let mut stream = conn.get_stream().lock().await;
+                    let mut stream = stream_arc.lock().await;
                     stream.read_exact(&mut content).await.is_ok()
                 };
                 if !read_ok {
-                    conn.terminated = true;
+                    terminated = true;
                     break;
                 }
             }
@@ -186,13 +197,9 @@ pub async fn handle_connection(server: Arc<Server>, mut conn: Connection) {
 
                         if role != FCGI_RESPONDER {
                             if logging::get_log_level() >= logging::LOG_LEVEL_ERROR {
-                                logging::log(&format!(
-                                    "FASTCGI SERVER: unsupported role {}",
-                                    role
-                                ));
+                                logging::log(&format!("FASTCGI SERVER: unsupported role {}", role));
                             }
-                            // Send end request with unknown role
-                            send_end_request(&conn, request_id, 0, 3).await;
+                            send_end_request(&stream_arc, request_id, 0, 3).await;
                             continue;
                         }
                     }
@@ -215,7 +222,7 @@ pub async fn handle_connection(server: Arc<Server>, mut conn: Connection) {
                     if logging::get_log_level() >= logging::LOG_LEVEL_DEBUG {
                         logging::log("FASTCGI SERVER: abort request");
                     }
-                    conn.terminated = true;
+                    terminated = true;
                     break;
                 }
                 _ => {
@@ -229,14 +236,23 @@ pub async fn handle_connection(server: Arc<Server>, mut conn: Connection) {
             }
         }
 
-        if conn.terminated || !params_done {
+        if terminated {
+            let mut c = conn.lock().await;
+            c.terminated = true;
+            break;
+        }
+
+        if !params_done {
             break;
         }
 
         // Process the request
         let start = std::time::Instant::now();
-        conn.state_executing = true;
-        conn.state_text = "RUNNING_FCGI".to_string();
+        {
+            let mut c = conn.lock().await;
+            c.state_executing = true;
+            c.state_text = "RUNNING_FCGI".to_string();
+        }
 
         let params = parse_params(&params_data);
 
@@ -252,7 +268,6 @@ pub async fn handle_connection(server: Arc<Server>, mut conn: Connection) {
                 logging::log(&format!("FASTCGI SERVER: request param, {}={}", k, v));
             }
 
-            // Try parsing as number, then bool, then string
             if let Ok(f) = v.parse::<f64>() {
                 row.columns.insert(k.clone(), Value::Number(f));
             } else if v.eq_ignore_ascii_case("true") {
@@ -264,12 +279,10 @@ pub async fn handle_connection(server: Arc<Server>, mut conn: Connection) {
             }
         }
 
-        // Encode body as base64 Fb_body
+        // Encode body as base64 u_body
         if !stdin_data.is_empty() {
-            row.columns.insert(
-                "Fb_body".into(),
-                Value::String(BASE64.encode(&stdin_data)),
-            );
+            row.columns
+                .insert("u_body".into(), Value::String(BASE64.encode(&stdin_data)));
         }
 
         if logging::get_log_level() >= logging::LOG_LEVEL_DEBUG {
@@ -277,16 +290,18 @@ pub async fn handle_connection(server: Arc<Server>, mut conn: Connection) {
         }
 
         // Run insert pipeline
-        let (ok, err_str, result, insert_id) = insert_pipeline::insert(
-            &server.table,
-            &mut row,
-            &conn.metadata,
-            false,
-            None,
-        );
+        let metadata = {
+            let c = conn.lock().await;
+            c.metadata.clone()
+        };
+        let (ok, err_str, result, insert_id) =
+            insert_pipeline::insert(&server.table, &mut row, &metadata, false, None);
 
-        if conn.terminated {
-            break;
+        {
+            let c = conn.lock().await;
+            if c.terminated {
+                break;
+            }
         }
 
         // Build FastCGI response
@@ -294,10 +309,9 @@ pub async fn handle_connection(server: Arc<Server>, mut conn: Connection) {
         let mut status_code = 200u16;
         let mut response_body: Vec<u8> = Vec::new();
 
-        response_headers.push(("Fb_reply_id".into(), insert_id.clone()));
+        response_headers.push(("u-reply-id".into(), insert_id.clone()));
 
-        if ok && result.is_some() {
-            let result_rows = result.unwrap();
+        if let (true, Some(result_rows)) = (ok, result) {
             if !result_rows.is_empty() {
                 let first_row = &result_rows[0];
 
@@ -305,17 +319,18 @@ pub async fn handle_connection(server: Arc<Server>, mut conn: Connection) {
                     logging::log("FASTCGI SERVER: RPUSH OK, reading response and setting headers.");
                 }
 
-                // Set response headers from row columns
+                // Set response headers from row columns (underscores → dashes for HTTP)
                 for (k, v) in &first_row.columns {
                     let k_lower = k.to_lowercase();
-                    if k_lower != "fb_body" && k_lower != "status" {
+                    if k_lower != "u_body" && k_lower != "status" {
                         let val_str = match v {
                             Value::String(s) => s.clone(),
                             Value::Number(n) => n.to_string(),
                             Value::Bool(b) => b.to_string(),
                             Value::Null => continue,
                         };
-                        response_headers.push((k.clone(), val_str));
+                        let header_name = k.replace('_', "-");
+                        response_headers.push((header_name, val_str));
                     }
                 }
 
@@ -335,14 +350,14 @@ pub async fn handle_connection(server: Arc<Server>, mut conn: Connection) {
                     }
                 }
 
-                // Body (base64 decoded Fb_body)
-                if let Some(Value::String(body_b64)) = first_row.columns.get("Fb_body") {
+                // Body (base64 decoded u_body)
+                if let Some(Value::String(body_b64)) = first_row.columns.get("u_body") {
                     match BASE64.decode(body_b64.as_bytes()) {
                         Ok(decoded) => response_body = decoded,
                         Err(_) => {
                             if logging::get_log_level() >= logging::LOG_LEVEL_CRIT {
                                 logging::log(
-                                    "FASTCGI SERVER: unable to parse Fb_body, sending empty body",
+                                    "FASTCGI SERVER: unable to parse u_body, sending empty body",
                                 );
                             }
                         }
@@ -378,11 +393,11 @@ pub async fn handle_connection(server: Arc<Server>, mut conn: Connection) {
         stdout_data.extend_from_slice(&response_body);
 
         // Send FCGI_STDOUT records (chunk if > 65535)
-        send_fcgi_stream(&conn, FCGI_STDOUT, request_id, &stdout_data).await;
+        send_fcgi_stream(&stream_arc, FCGI_STDOUT, request_id, &stdout_data).await;
         // Empty FCGI_STDOUT to signal end
-        send_fcgi_stream(&conn, FCGI_STDOUT, request_id, &[]).await;
+        send_fcgi_stream(&stream_arc, FCGI_STDOUT, request_id, &[]).await;
         // Send FCGI_END_REQUEST
-        send_end_request(&conn, request_id, 0, FCGI_REQUEST_COMPLETE).await;
+        send_end_request(&stream_arc, request_id, 0, FCGI_REQUEST_COMPLETE).await;
 
         // Log latency
         let elapsed = start.elapsed();
@@ -393,8 +408,11 @@ pub async fn handle_connection(server: Arc<Server>, mut conn: Connection) {
             ));
         }
 
-        conn.state_executing = false;
-        conn.state_text = "IDLE".to_string();
+        {
+            let mut c = conn.lock().await;
+            c.state_executing = false;
+            c.state_text = "IDLE".to_string();
+        }
 
         if !keep_conn {
             break;
@@ -403,8 +421,13 @@ pub async fn handle_connection(server: Arc<Server>, mut conn: Connection) {
 }
 
 /// Send a FCGI stream (STDOUT/STDERR) in chunks.
-async fn send_fcgi_stream(conn: &Connection, rec_type: u8, request_id: u16, data: &[u8]) {
-    let mut stream = conn.get_stream().lock().await;
+async fn send_fcgi_stream(
+    stream_arc: &Arc<Mutex<TcpStream>>,
+    rec_type: u8,
+    request_id: u16,
+    data: &[u8],
+) {
+    let mut stream = stream_arc.lock().await;
 
     if data.is_empty() {
         // Send empty record to signal end of stream
@@ -429,8 +452,13 @@ async fn send_fcgi_stream(conn: &Connection, rec_type: u8, request_id: u16, data
 }
 
 /// Send FCGI_END_REQUEST record.
-async fn send_end_request(conn: &Connection, request_id: u16, app_status: u32, protocol_status: u8) {
-    let mut stream = conn.get_stream().lock().await;
+async fn send_end_request(
+    stream_arc: &Arc<Mutex<TcpStream>>,
+    request_id: u16,
+    app_status: u32,
+    protocol_status: u8,
+) {
+    let mut stream = stream_arc.lock().await;
     let header = build_header(FCGI_END_REQUEST, request_id, 8, 0);
     let as_bytes = app_status.to_be_bytes();
     let body = [

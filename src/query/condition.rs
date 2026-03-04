@@ -83,11 +83,12 @@ fn evaluate_expr(expr: &sqlparser::ast::Expr, columns: &HashMap<String, Value>) 
         } => {
             let left_val = resolve_expr_value(left, columns);
             let pattern_val = resolve_expr_value(pattern, columns);
-            let matches = like_match(
-                &left_val.to_string_repr(),
-                &pattern_val.to_string_repr(),
-            );
-            if *negated { !matches } else { matches }
+            let matches = like_match(&left_val.to_string_repr(), &pattern_val.to_string_repr());
+            if *negated {
+                !matches
+            } else {
+                matches
+            }
         }
         Expr::IsNull(inner) => {
             let val = resolve_expr_value(inner, columns);
@@ -98,13 +99,21 @@ fn evaluate_expr(expr: &sqlparser::ast::Expr, columns: &HashMap<String, Value>) 
             !val.is_null()
         }
         Expr::Nested(inner) => evaluate_expr(inner, columns),
-        Expr::InList { expr: left, list, negated } => {
+        Expr::InList {
+            expr: left,
+            list,
+            negated,
+        } => {
             let left_val = resolve_expr_value(left, columns);
             let found = list.iter().any(|item| {
                 let item_val = resolve_expr_value(item, columns);
                 values_equal(&left_val, &item_val)
             });
-            if *negated { !found } else { found }
+            if *negated {
+                !found
+            } else {
+                found
+            }
         }
         _ => true, // Unsupported expression — pass through
     }
@@ -115,9 +124,7 @@ fn resolve_expr_value(expr: &sqlparser::ast::Expr, columns: &HashMap<String, Val
     use sqlparser::ast::Expr;
 
     match expr {
-        Expr::Identifier(ident) => {
-            columns.get(&ident.value).cloned().unwrap_or(Value::Null)
-        }
+        Expr::Identifier(ident) => columns.get(&ident.value).cloned().unwrap_or(Value::Null),
         Expr::Value(v) => match v {
             sqlparser::ast::Value::Number(n, _) => {
                 n.parse::<f64>().map(Value::Number).unwrap_or(Value::Null)
@@ -159,9 +166,10 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Null, Value::Null) => true,
         // Cross-type: try numeric comparison
-        (Value::String(s), Value::Number(n)) | (Value::Number(n), Value::String(s)) => {
-            s.parse::<f64>().map(|f| (f - n).abs() < f64::EPSILON).unwrap_or(false)
-        }
+        (Value::String(s), Value::Number(n)) | (Value::Number(n), Value::String(s)) => s
+            .parse::<f64>()
+            .map(|f| (f - n).abs() < f64::EPSILON)
+            .unwrap_or(false),
         _ => false,
     }
 }
@@ -170,21 +178,15 @@ fn values_lt(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Number(a), Value::Number(b)) => a < b,
         (Value::String(a), Value::String(b)) => a < b,
-        (Value::String(s), Value::Number(n)) => {
-            s.parse::<f64>().map(|f| f < *n).unwrap_or(false)
-        }
-        (Value::Number(n), Value::String(s)) => {
-            s.parse::<f64>().map(|f| *n < f).unwrap_or(false)
-        }
+        (Value::String(s), Value::Number(n)) => s.parse::<f64>().map(|f| f < *n).unwrap_or(false),
+        (Value::Number(n), Value::String(s)) => s.parse::<f64>().map(|f| *n < f).unwrap_or(false),
         _ => false,
     }
 }
 
 /// SQL LIKE pattern matching (% = any chars, _ = single char).
 fn like_match(value: &str, pattern: &str) -> bool {
-    let re_pattern = pattern
-        .replace('%', ".*")
-        .replace('_', ".");
+    let re_pattern = pattern.replace('%', ".*").replace('_', ".");
     regex::Regex::new(&format!("^{}$", re_pattern))
         .map(|re| re.is_match(value))
         .unwrap_or(false)

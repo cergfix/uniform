@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main, master, develop]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -Dwarnings
@@ -52,24 +56,38 @@ jobs:
 
   build:
     name: Build (${{ matrix.target }})
-    runs-on: ${{ matrix.os }}
+    needs: [check, fmt, clippy, test]
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-          - os: macos-latest
-            target: aarch64-apple-darwin
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
-      - run: cargo build --release --target ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+      - name: Start test services
+        run: docker compose -f tests/docker-compose.test.yml up -d --wait
+      - name: Install test CLI tools
+        run: sudo apt-get update && sudo apt-get install -y redis-tools mysql-client curl
+      - name: Run integration tests
+        run: |
+          chmod +x target/${{ matrix.target }}/release/uniform
+          BINARY=target/${{ matrix.target }}/release/uniform python3 tests/integration.py
+      - name: Run load test
+        run: |
+          BINARY=target/${{ matrix.target }}/release/uniform python3 tests/load_test.py
+      - name: Stop test services
+        if: always()
+        run: docker compose -f tests/docker-compose.test.yml down -v
       - uses: actions/upload-artifact@v4
         with:
           name: uniform-${{ matrix.target }}

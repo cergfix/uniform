@@ -1,0 +1,32 @@
+services:
+  uniform:
+    image: ubuntu:24.04
+    volumes:
+      - ../${BINARY}:/usr/local/bin/uniform:ro
+      - ./docker/load-test.uniform:/etc/uniform/init.uniform:ro
+    ports:
+      - "6393:6393"
+      - "6395:6395"
+    entrypoint: ["sh", "-c", "(cat /etc/uniform/init.uniform; sleep infinity) | /usr/local/bin/uniform"]
+  redis:
+    image: redis:7-bookworm
+    ports:
+      - "6394:6379"
+  mysql:
+    image: mysql:8.4
+    ports:
+      - "3307:3306"
+    tmpfs:
+      - /var/lib/mysql
+    environment:
+      MYSQL_DATABASE: load_test_db
+      MYSQL_USER: load_user
+      MYSQL_PASSWORD: load_pass
+      MYSQL_ROOT_PASSWORD: root
+    volumes:
+      - ./docker/load-test-mysql-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 2s
+      timeout: 5s
+      retries: 15

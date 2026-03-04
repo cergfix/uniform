@@ -1,0 +1,6 @@
+CREATE TABLE load_test ({"size":1100000});
+CREATE SERVER REDIS load_redis ({"bind":"0.0.0.0:6393"});
+CREATE TABLE mysql_load_test ({"size":1100000});
+CREATE TABLE mysql_load_test_where ({"size":1100000});
+CREATE INDEX idx_i ({"table":"mysql_load_test_where","column":"i","unique":false});
+CREATE SERVER MYSQL load_mysql ({"bind":"0.0.0.0:6395"});

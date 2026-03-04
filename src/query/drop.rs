@@ -91,7 +91,16 @@ pub fn drop_worker_cmd(name: &str) -> QueryResponse {
 }
 
 pub fn drop_connection_cmd(addr: &str) -> QueryResponse {
-    // TODO: iterate servers, find connection by addr, terminate it
-    let _ = addr;
+    for server_entry in SERVERS.iter() {
+        if let Some((_, conn)) = server_entry.value().connections.remove(addr) {
+            if let Ok(mut c) = conn.try_lock() {
+                c.terminated = true;
+            }
+            if logging::get_log_level() >= logging::LOG_LEVEL_DEBUG {
+                logging::log(&format!("DROP CONNECTION: dropped connection {}", addr));
+            }
+            return QueryResponse::ok_bool();
+        }
+    }
     QueryResponse::err("No such connection.")
 }

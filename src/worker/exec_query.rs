@@ -1,4 +1,3 @@
-
 use tokio::sync::watch;
 
 use crate::query::engine;
@@ -47,13 +46,11 @@ impl WorkerLoop for ExecQueryWorker {
 
             let result = engine::run_query(&q, None, &mut local_conn.metadata, None);
 
-            if !result.success {
-                if logging::get_log_level() >= logging::LOG_LEVEL_ERROR {
-                    logging::log(&format!(
-                        "WORKER {}: EXEC_QUERY error: {}",
-                        self.config.name, result.err
-                    ));
-                }
+            if !result.success && logging::get_log_level() >= logging::LOG_LEVEL_ERROR {
+                logging::log(&format!(
+                    "WORKER {}: EXEC_QUERY error: {}",
+                    self.config.name, result.err
+                ));
             }
         }
 

@@ -65,6 +65,52 @@ impl PushToCloudStorageWorker {
             encrypt_key,
         }
     }
+
+    /// Upload data to S3 using aws-sdk-s3.
+    async fn s3_upload(&self, s3_key: &str, data: Vec<u8>) -> Result<(), String> {
+        use aws_config::Region;
+        use aws_sdk_s3::primitives::ByteStream;
+
+        let mut config_loader = aws_config::defaults(aws_config::BehaviorVersion::latest())
+            .region(Region::new(self.region.clone()));
+
+        if !self.provider_url.is_empty() {
+            config_loader = config_loader.endpoint_url(&self.provider_url);
+        }
+
+        // Use explicit credentials if provided
+        if !self.key.is_empty() && !self.secret.is_empty() {
+            let creds = aws_sdk_s3::config::Credentials::new(
+                &self.key,
+                &self.secret,
+                None,
+                None,
+                "uniform",
+            );
+            config_loader = config_loader.credentials_provider(creds);
+        }
+
+        let sdk_config = config_loader.load().await;
+        let client = aws_sdk_s3::Client::new(&sdk_config);
+
+        let content_type = if self.output_mode == "json" {
+            "application/json"
+        } else {
+            "application/octet-stream"
+        };
+
+        client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(s3_key)
+            .body(ByteStream::from(data))
+            .content_type(content_type)
+            .send()
+            .await
+            .map_err(|e| format!("S3 upload error: {}", e))?;
+
+        Ok(())
+    }
 }
 
 impl WorkerLoop for PushToCloudStorageWorker {
@@ -114,7 +160,7 @@ impl WorkerLoop for PushToCloudStorageWorker {
             data = encrypted.into_bytes();
         }
 
-        // Generate S3 key path
+        // Generate S3 key path (matches Go: path/YYYY/MM/DD/HH/mm/name-hostname-timestamp.ext)
         let now = chrono::Utc::now();
         let hostname = hostname::get()
             .map(|h: std::ffi::OsString| h.to_string_lossy().into_owned())
@@ -138,9 +184,6 @@ impl WorkerLoop for PushToCloudStorageWorker {
             ext
         );
 
-        // Upload to S3 using AWS SDK
-        // Note: This is a blocking operation for simplicity.
-        // In production, you'd use the async aws-sdk-s3 client.
         if logging::get_log_level() >= logging::LOG_LEVEL_DEBUG {
             logging::log(&format!(
                 "WORKER {}: uploading {} bytes to s3://{}/{}",
@@ -151,17 +194,22 @@ impl WorkerLoop for PushToCloudStorageWorker {
             ));
         }
 
-        // For now, write to a temp file as fallback
-        // TODO: integrate async S3 upload using aws-sdk-s3
-        let temp_path = format!("/tmp/{}", s3_key.replace('/', "_"));
-        if let Err(e) = std::fs::write(&temp_path, &data) {
+        // Upload to S3 (blocking via tokio runtime)
+        let upload_result = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => tokio::task::block_in_place(|| {
+                handle.block_on(self.s3_upload(&s3_key, data.clone()))
+            }),
+            Err(_) => Err("No tokio runtime available".into()),
+        };
+
+        if let Err(e) = upload_result {
             if logging::get_log_level() >= logging::LOG_LEVEL_ERROR {
                 logging::log(&format!(
-                    "WORKER {}: S3 upload fallback error: {}",
+                    "WORKER {}: S3 upload error: {}",
                     self.config.name, e
                 ));
             }
-            // Insert into dest_table as fallback
+            // Fallback: insert into dest_table
             if !self.dest_table.is_empty() {
                 if let Some(table) = crate::store::registry::get_table(&self.dest_table) {
                     for row in &rows {

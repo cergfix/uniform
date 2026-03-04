@@ -196,11 +196,9 @@ impl From<Value> for serde_json::Value {
         match v {
             Value::Null => serde_json::Value::Null,
             Value::Bool(b) => serde_json::Value::Bool(b),
-            Value::Number(n) => {
-                serde_json::Number::from_f64(n)
-                    .map(serde_json::Value::Number)
-                    .unwrap_or(serde_json::Value::Null)
-            }
+            Value::Number(n) => serde_json::Number::from_f64(n)
+                .map(serde_json::Value::Number)
+                .unwrap_or(serde_json::Value::Null),
             Value::String(s) => serde_json::Value::String(s),
         }
     }

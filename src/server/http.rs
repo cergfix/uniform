@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::Mutex;
 
 use crate::config::vars;
 use crate::query::insert_pipeline;
@@ -12,19 +13,31 @@ use crate::types::value::Value;
 use crate::util::logging;
 
 /// Handle an HTTP connection.
-pub async fn handle_connection(server: Arc<Server>, mut conn: Connection) {
+pub async fn handle_connection(server: Arc<Server>, conn: Arc<Mutex<Connection>>) {
     let mut buf = vec![0u8; server.buffer_size];
 
+    // Clone stream Arc and read-only fields once
+    let (stream_arc, local_addr, remote_addr) = {
+        let c = conn.lock().await;
+        (
+            c.get_stream().clone(),
+            c.local_addr.clone(),
+            c.remote_addr.clone(),
+        )
+    };
+
     loop {
-        if server.is_shutting_down() || conn.terminated {
-            break;
+        {
+            let mut c = conn.lock().await;
+            if server.is_shutting_down() || c.terminated {
+                break;
+            }
+            c.state_text = "READ_PACKET".to_string();
         }
 
-        conn.state_text = "READ_PACKET".to_string();
-
-        // Read from the stream
+        // Read from the stream (no conn lock held during I/O)
         let n = {
-            let mut stream = conn.get_stream().lock().await;
+            let mut stream = stream_arc.lock().await;
             match stream.read(&mut buf).await {
                 Ok(0) => break,
                 Ok(n) => n,
@@ -33,13 +46,17 @@ pub async fn handle_connection(server: Arc<Server>, mut conn: Connection) {
         };
 
         let start = std::time::Instant::now();
-        conn.state_executing = true;
-        conn.state_text = "RUNNING_CMD".to_string();
+        {
+            let mut c = conn.lock().await;
+            c.state_executing = true;
+            c.state_text = "RUNNING_CMD".to_string();
+        }
 
         let request = String::from_utf8_lossy(&buf[..n]).to_string();
 
         if request.is_empty() || request == "\r\n" {
-            conn.state_executing = false;
+            let mut c = conn.lock().await;
+            c.state_executing = false;
             continue;
         }
 
@@ -71,10 +88,8 @@ pub async fn handle_connection(server: Arc<Server>, mut conn: Connection) {
             .insert("REQUEST_URI".into(), Value::String(String::new()));
         row.columns
             .insert("DOCUMENT_URI".into(), Value::String(String::new()));
-        row.columns.insert(
-            "SERVER_PROTOCOL".into(),
-            Value::String("HTTP/1.1".into()),
-        );
+        row.columns
+            .insert("SERVER_PROTOCOL".into(), Value::String("HTTP/1.1".into()));
         row.columns.insert(
             "SERVER_SOFTWARE".into(),
             Value::String(format!("{}/{}", vars::APP_NAME, vars::version())),
@@ -91,7 +106,7 @@ pub async fn handle_connection(server: Arc<Server>, mut conn: Connection) {
             .insert("GATEWAY_INTERFACE".into(), Value::String("CGI/1.1".into()));
 
         // Extract local/remote addresses
-        let local_parts: Vec<&str> = conn.local_addr.rsplitn(2, ':').collect();
+        let local_parts: Vec<&str> = local_addr.rsplitn(2, ':').collect();
         if local_parts.len() == 2 {
             row.columns.insert(
                 "SERVER_ADDR".into(),
@@ -103,7 +118,7 @@ pub async fn handle_connection(server: Arc<Server>, mut conn: Connection) {
             );
         }
 
-        let remote_parts: Vec<&str> = conn.remote_addr.rsplitn(2, ':').collect();
+        let remote_parts: Vec<&str> = remote_addr.rsplitn(2, ':').collect();
         if remote_parts.len() == 2 {
             row.columns.insert(
                 "REMOTE_ADDR".into(),
@@ -183,10 +198,8 @@ pub async fn handle_connection(server: Arc<Server>, mut conn: Connection) {
                         "SERVER_PROTOCOL".into(),
                         Value::String(http_proto.to_string()),
                     );
-                    row.columns.insert(
-                        "REQUEST_METHOD".into(),
-                        Value::String(method.to_string()),
-                    );
+                    row.columns
+                        .insert("REQUEST_METHOD".into(), Value::String(method.to_string()));
                     row.columns.insert(
                         "QUERY_STRING".into(),
                         Value::String(query_string.to_string()),
@@ -233,12 +246,15 @@ pub async fn handle_connection(server: Arc<Server>, mut conn: Connection) {
                         uri
                     );
                     {
-                        let mut stream = conn.get_stream().lock().await;
+                        let mut stream = stream_arc.lock().await;
                         let _ = stream.write_all(msg.as_bytes()).await;
                     }
                     let elapsed = start.elapsed();
                     crate::util::metrics::publish_server_latency_probe(&server, elapsed, "");
-                    conn.state_executing = false;
+                    {
+                        let mut c = conn.lock().await;
+                        c.state_executing = false;
+                    }
                     break;
                 }
             }
@@ -257,74 +273,77 @@ pub async fn handle_connection(server: Arc<Server>, mut conn: Connection) {
                 server.robots
             );
             {
-                let mut stream = conn.get_stream().lock().await;
+                let mut stream = stream_arc.lock().await;
                 let _ = stream.write_all(msg.as_bytes()).await;
             }
             let elapsed = start.elapsed();
             crate::util::metrics::publish_server_latency_probe(&server, elapsed, "");
-            conn.state_executing = false;
+            {
+                let mut c = conn.lock().await;
+                c.state_executing = false;
+            }
             break;
         }
 
         // Base64 encode body
         row.columns
-            .insert("Fb_body".into(), Value::String(BASE64.encode(body)));
+            .insert("u_body".into(), Value::String(BASE64.encode(body)));
 
         // Insert into table via pipeline
-        let metadata = conn.metadata.clone();
+        let metadata = {
+            let c = conn.lock().await;
+            c.metadata.clone()
+        };
         let (success, err_str, result, insert_id) =
             insert_pipeline::insert(&server.table, &mut row, &metadata, false, None);
 
         if !success {
             let msg = format!(
-                "{} 500\r\nServer: {}\r\nFb_reply_id: {}\r\n\r\nSystem error.\r\n",
+                "{} 500\r\nServer: {}\r\nu-reply-id: {}\r\n\r\nSystem error.\r\n",
                 server_protocol,
                 vars::APP_NAME,
                 insert_id
             );
-            let mut stream = conn.get_stream().lock().await;
+            let mut stream = stream_arc.lock().await;
             let _ = stream.write_all(msg.as_bytes()).await;
 
             if logging::get_log_level() >= logging::LOG_LEVEL_CRIT {
-                logging::log(&format!(
-                    "HTTP SERVER: replying status 500 -- {}",
-                    err_str
-                ));
+                logging::log(&format!("HTTP SERVER: replying status 500 -- {}", err_str));
             }
         } else if let Some(ref rows) = result {
             if !rows.is_empty() {
-                let response =
-                    build_http_response(&server_protocol, &rows[0], use_gzip);
-                let mut stream = conn.get_stream().lock().await;
+                let response = build_http_response(&server_protocol, &rows[0], use_gzip);
+                let mut stream = stream_arc.lock().await;
                 let _ = stream.write_all(response.as_bytes()).await;
             } else {
-                // 504 - empty response (1_WAY mode)
                 let msg = format!(
-                    "{} 504\r\nServer: {}\r\nFb_reply_id: {}\r\n\r\n",
+                    "{} 504\r\nServer: {}\r\nu-reply-id: {}\r\n\r\n",
                     server_protocol,
                     vars::APP_NAME,
                     insert_id
                 );
-                let mut stream = conn.get_stream().lock().await;
+                let mut stream = stream_arc.lock().await;
                 let _ = stream.write_all(msg.as_bytes()).await;
             }
         } else {
-            // No result - 504
             let msg = format!(
-                "{} 504\r\nServer: {}\r\nFb_reply_id: {}\r\n\r\n",
+                "{} 504\r\nServer: {}\r\nu-reply-id: {}\r\n\r\n",
                 server_protocol,
                 vars::APP_NAME,
                 insert_id
             );
-            let mut stream = conn.get_stream().lock().await;
+            let mut stream = stream_arc.lock().await;
             let _ = stream.write_all(msg.as_bytes()).await;
         }
 
         let elapsed = start.elapsed();
         crate::util::metrics::publish_server_latency_probe(&server, elapsed, &insert_id);
 
-        conn.state_executing = false;
-        conn.last_activity = chrono::Utc::now();
+        {
+            let mut c = conn.lock().await;
+            c.state_executing = false;
+            c.last_activity = chrono::Utc::now();
+        }
 
         // HTTP/1.0 style: one request per connection
         break;
@@ -348,11 +367,12 @@ fn build_http_response(protocol: &str, row: &OwnedRow, use_gzip: bool) -> String
         vars::version()
     ));
 
-    // Headers from row columns
+    // Headers from row columns (underscores → dashes for HTTP)
     for (key, val) in &row.columns {
         let key_lower = key.to_lowercase();
-        if key_lower != "fb_body" && key_lower != "status" {
-            msg.push_str(&format!("{}: {}\r\n", key, val.to_string_repr()));
+        if key_lower != "u_body" && key_lower != "status" {
+            let header_name = key.replace('_', "-");
+            msg.push_str(&format!("{}: {}\r\n", header_name, val.to_string_repr()));
         }
     }
 
@@ -363,8 +383,8 @@ fn build_http_response(protocol: &str, row: &OwnedRow, use_gzip: bool) -> String
     msg.push_str("\r\n");
 
     // Body
-    if let Some(Value::String(fb_body)) = row.columns.get("Fb_body") {
-        if let Ok(decoded) = BASE64.decode(fb_body) {
+    if let Some(Value::String(u_body)) = row.columns.get("u_body") {
+        if let Ok(decoded) = BASE64.decode(u_body) {
             let body_str = String::from_utf8_lossy(&decoded);
             if use_gzip {
                 if let Ok(compressed) = compress_http_message(&body_str) {

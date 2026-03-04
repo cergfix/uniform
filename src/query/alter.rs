@@ -1,5 +1,6 @@
 use crate::store::registry::{PROCS, SERVERS, TABLES};
 use crate::types::query_response::QueryResponse;
+use crate::util::json::normalize_json_keys;
 use crate::util::logging;
 
 /// ALTER TABLE name (options)
@@ -10,7 +11,7 @@ pub fn alter_table_cmd(name: &str, options_str: &str) -> QueryResponse {
     };
 
     let opts: serde_json::Value = match serde_json::from_str(options_str) {
-        Ok(v) => v,
+        Ok(v) => normalize_json_keys(v),
         Err(e) => return QueryResponse::err(format!("Invalid JSON options: {}", e)),
     };
 
@@ -19,19 +20,19 @@ pub fn alter_table_cmd(name: &str, options_str: &str) -> QueryResponse {
     if let Some((_, table_arc)) = TABLES.remove(name) {
         match std::sync::Arc::try_unwrap(table_arc) {
             Ok(mut table) => {
-                if let Some(v) = opts.get("ForceLimit").and_then(|v| v.as_i64()) {
+                if let Some(v) = opts.get("forcelimit").and_then(|v| v.as_i64()) {
                     table.force_limit = v as i32;
                 }
-                if let Some(v) = opts.get("ForceOffset").and_then(|v| v.as_i64()) {
+                if let Some(v) = opts.get("forceoffset").and_then(|v| v.as_i64()) {
                     table.force_offset = v as i32;
                 }
-                if let Some(v) = opts.get("MaxScanTimeMs").and_then(|v| v.as_i64()) {
+                if let Some(v) = opts.get("maxscantimems").and_then(|v| v.as_i64()) {
                     table.max_scan_time_ms = v as i32;
                 }
-                if let Some(v) = opts.get("Silent").and_then(|v| v.as_bool()) {
+                if let Some(v) = opts.get("silent").and_then(|v| v.as_bool()) {
                     table.silent = v;
                 }
-                if let Some(v) = opts.get("LongPollMaxClients").and_then(|v| v.as_u64()) {
+                if let Some(v) = opts.get("longpollmaxclients").and_then(|v| v.as_u64()) {
                     table.long_poll_max_clients = v as usize;
                 }
 
@@ -60,7 +61,7 @@ pub fn alter_server_cmd(name: &str, options_str: &str) -> QueryResponse {
     };
 
     let opts: serde_json::Value = match serde_json::from_str(options_str) {
-        Ok(v) => v,
+        Ok(v) => normalize_json_keys(v),
         Err(e) => return QueryResponse::err(format!("Invalid JSON options: {}", e)),
     };
 
@@ -68,19 +69,19 @@ pub fn alter_server_cmd(name: &str, options_str: &str) -> QueryResponse {
     if let Some((_, server_arc)) = SERVERS.remove(name) {
         match std::sync::Arc::try_unwrap(server_arc) {
             Ok(mut server) => {
-                if let Some(v) = opts.get("ForceLimit").and_then(|v| v.as_i64()) {
+                if let Some(v) = opts.get("forcelimit").and_then(|v| v.as_i64()) {
                     server.force_limit = v as i32;
                 }
-                if let Some(v) = opts.get("ForceOffset").and_then(|v| v.as_i64()) {
+                if let Some(v) = opts.get("forceoffset").and_then(|v| v.as_i64()) {
                     server.force_offset = v as i32;
                 }
-                if let Some(v) = opts.get("MaxScanTimeMs").and_then(|v| v.as_i64()) {
+                if let Some(v) = opts.get("maxscantimems").and_then(|v| v.as_i64()) {
                     server.max_scan_time_ms = v as i32;
                 }
-                if let Some(v) = opts.get("TimeoutMs").and_then(|v| v.as_i64()) {
+                if let Some(v) = opts.get("timeoutms").and_then(|v| v.as_i64()) {
                     server.timeout_ms = v as i32;
                 }
-                if let Some(v) = opts.get("LatencyTargetMs").and_then(|v| v.as_f64()) {
+                if let Some(v) = opts.get("latencytargetms").and_then(|v| v.as_f64()) {
                     server.latency_target_ms = v;
                 }
 
@@ -100,7 +101,7 @@ pub fn alter_server_cmd(name: &str, options_str: &str) -> QueryResponse {
 /// ALTER PROC name (options)
 pub fn alter_proc_cmd(name: &str, options_str: &str) -> QueryResponse {
     let opts: serde_json::Value = match serde_json::from_str(options_str) {
-        Ok(v) => v,
+        Ok(v) => normalize_json_keys(v),
         Err(e) => return QueryResponse::err(format!("Invalid JSON options: {}", e)),
     };
 
@@ -110,25 +111,25 @@ pub fn alter_proc_cmd(name: &str, options_str: &str) -> QueryResponse {
         None => return QueryResponse::err(format!("Proc doesn't exist: {}", name)),
     };
 
-    if let Some(v) = opts.get("Enabled").and_then(|v| v.as_bool()) {
+    if let Some(v) = opts.get("enabled").and_then(|v| v.as_bool()) {
         proc.enabled = v;
     }
-    if let Some(v) = opts.get("Src").and_then(|v| v.as_str()) {
+    if let Some(v) = opts.get("src").and_then(|v| v.as_str()) {
         proc.src = v.to_string();
     }
-    if let Some(v) = opts.get("Dest").and_then(|v| v.as_str()) {
+    if let Some(v) = opts.get("dest").and_then(|v| v.as_str()) {
         proc.dest = v.to_string();
     }
-    if let Some(v) = opts.get("PostWaitMs").and_then(|v| v.as_i64()) {
+    if let Some(v) = opts.get("postwaitms").and_then(|v| v.as_i64()) {
         proc.post_wait_ms = v as i32;
     }
-    if let Some(v) = opts.get("WaitMs").and_then(|v| v.as_i64()) {
+    if let Some(v) = opts.get("waitms").and_then(|v| v.as_i64()) {
         proc.wait_ms = v as i32;
     }
-    if let Some(v) = opts.get("CaseQuery").and_then(|v| v.as_str()) {
+    if let Some(v) = opts.get("casequery").and_then(|v| v.as_str()) {
         proc.case_query_string = v.to_string();
     }
-    if let Some(v) = opts.get("Patch").and_then(|v| v.as_str()) {
+    if let Some(v) = opts.get("patch").and_then(|v| v.as_str()) {
         proc.patch_string = v.to_string();
         // Re-parse patch data
         if let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(v) {
@@ -139,40 +140,40 @@ pub fn alter_proc_cmd(name: &str, options_str: &str) -> QueryResponse {
             proc.patch_data = Some(patch);
         }
     }
-    if let Some(v) = opts.get("ReduceKey").and_then(|v| v.as_str()) {
+    if let Some(v) = opts.get("reducekey").and_then(|v| v.as_str()) {
         proc.reduce_key = v.to_string();
     }
-    if let Some(v) = opts.get("ReduceToLatest").and_then(|v| v.as_bool()) {
+    if let Some(v) = opts.get("reducetolatest").and_then(|v| v.as_bool()) {
         proc.reduce_to_latest = v;
     }
-    if let Some(v) = opts.get("EncryptKey").and_then(|v| v.as_str()) {
+    if let Some(v) = opts.get("encryptkey").and_then(|v| v.as_str()) {
         proc.encrypt_key = v.to_string();
     }
-    if let Some(v) = opts.get("EncryptFields").and_then(|v| v.as_str()) {
+    if let Some(v) = opts.get("encryptfields").and_then(|v| v.as_str()) {
         proc.encrypt_fields = v.to_string();
     }
-    if let Some(v) = opts.get("DecryptKey").and_then(|v| v.as_str()) {
+    if let Some(v) = opts.get("decryptkey").and_then(|v| v.as_str()) {
         proc.decrypt_key = v.to_string();
     }
-    if let Some(v) = opts.get("DecryptFields").and_then(|v| v.as_str()) {
+    if let Some(v) = opts.get("decryptfields").and_then(|v| v.as_str()) {
         proc.decrypt_fields = v.to_string();
     }
-    if let Some(v) = opts.get("GzipFields").and_then(|v| v.as_str()) {
+    if let Some(v) = opts.get("gzipfields").and_then(|v| v.as_str()) {
         proc.gzip_fields = v.to_string();
     }
-    if let Some(v) = opts.get("GunzipFields").and_then(|v| v.as_str()) {
+    if let Some(v) = opts.get("gunzipfields").and_then(|v| v.as_str()) {
         proc.gunzip_fields = v.to_string();
     }
-    if let Some(v) = opts.get("ReplyStatus").and_then(|v| v.as_str()) {
+    if let Some(v) = opts.get("replystatus").and_then(|v| v.as_str()) {
         proc.reply_status = v.to_string();
     }
-    if let Some(v) = opts.get("ReplyBody").and_then(|v| v.as_str()) {
+    if let Some(v) = opts.get("replybody").and_then(|v| v.as_str()) {
         proc.reply_body = v.to_string();
     }
-    if let Some(v) = opts.get("StartTime").and_then(|v| v.as_str()) {
+    if let Some(v) = opts.get("starttime").and_then(|v| v.as_str()) {
         proc.start_time_string = v.to_string();
     }
-    if let Some(v) = opts.get("EndTime").and_then(|v| v.as_str()) {
+    if let Some(v) = opts.get("endtime").and_then(|v| v.as_str()) {
         proc.end_time_string = v.to_string();
     }
 

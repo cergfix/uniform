@@ -1,4 +1,3 @@
-
 use tokio::sync::watch;
 
 use crate::types::row::OwnedRow;
@@ -17,6 +16,7 @@ pub struct PushToElasticsearchWorker {
 }
 
 impl PushToElasticsearchWorker {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: String,
         table: String,
@@ -55,14 +55,14 @@ impl WorkerLoop for PushToElasticsearchWorker {
         for row in &rows {
             let json_str = row.to_json().map_err(|e| format!("JSON error: {}", e))?;
 
-            let fb_id = match row.columns.get("Fb_id") {
+            let row_id = match row.columns.get("u_id") {
                 Some(Value::String(s)) => s.clone(),
                 _ => uuid::Uuid::new_v4().to_string(),
             };
 
             let url = format!(
                 "{}/{}/{}/{}",
-                self.host, self.es_index, self.es_type, fb_id
+                self.host, self.es_index, self.es_type, row_id
             );
 
             match client
@@ -74,10 +74,7 @@ impl WorkerLoop for PushToElasticsearchWorker {
                 Ok(resp) => {
                     if let Ok(body) = resp.text() {
                         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
-                            let result = json
-                                .get("result")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("");
+                            let result = json.get("result").and_then(|v| v.as_str()).unwrap_or("");
                             if result != "created" && result != "updated" {
                                 if logging::get_log_level() >= logging::LOG_LEVEL_ERROR {
                                     logging::log(&format!(
@@ -92,10 +89,7 @@ impl WorkerLoop for PushToElasticsearchWorker {
                 }
                 Err(e) => {
                     if logging::get_log_level() >= logging::LOG_LEVEL_ERROR {
-                        logging::log(&format!(
-                            "WORKER {}: HTTP error: {}",
-                            self.config.name, e
-                        ));
+                        logging::log(&format!("WORKER {}: HTTP error: {}", self.config.name, e));
                     }
                     fallback_insert(&self.dest_table, row);
                 }

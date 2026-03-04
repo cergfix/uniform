@@ -4,6 +4,8 @@ use std::sync::Arc;
 
 use crossbeam_skiplist::SkipMap;
 
+use chrono::{DateTime, Utc};
+
 use crate::store::index::{SecondaryIndex, SharedIndex};
 use crate::store::long_poll::LongPollClient;
 use crate::types::row::{OwnedRow, Row};
@@ -81,7 +83,28 @@ impl Table {
 
     /// Insert a row into the table. Returns the seq_id on success.
     pub fn insert(&self, columns: HashMap<String, Value>) -> Result<u64, String> {
-        // Check capacity
+        let seq_id = self.prepare_insert(&columns)?;
+        let row = Row::new(seq_id, columns);
+        self.rows.insert(seq_id, row);
+        self.row_count.fetch_add(1, Ordering::Relaxed);
+        Ok(seq_id)
+    }
+
+    /// Insert with pre-built fields (skips Row::new UUID/timestamp generation).
+    pub fn insert_raw(
+        &self,
+        columns: HashMap<String, Value>,
+        created: DateTime<Utc>,
+    ) -> Result<u64, String> {
+        let seq_id = self.prepare_insert(&columns)?;
+        let row = Row::from_raw(seq_id, columns, created);
+        self.rows.insert(seq_id, row);
+        self.row_count.fetch_add(1, Ordering::Relaxed);
+        Ok(seq_id)
+    }
+
+    /// Shared logic: capacity check, seq_id allocation, index constraints + updates.
+    fn prepare_insert(&self, columns: &HashMap<String, Value>) -> Result<u64, String> {
         if let Some(max) = self.max_size {
             if self.row_count.load(Ordering::Relaxed) as usize >= max {
                 return Err("Table full".into());
@@ -95,9 +118,7 @@ impl Table {
             if idx.unique {
                 if let Some(val) = columns.get(&idx.column) {
                     let has_live = idx.has_live_entry(val, |sid| {
-                        self.rows
-                            .get(&sid)
-                            .map_or(false, |r| !r.value().is_claimed())
+                        self.rows.get(&sid).is_some_and(|r| !r.value().is_claimed())
                     });
                     if has_live {
                         return Err(format!("Duplicate key on index {}", idx.name));
@@ -113,36 +134,53 @@ impl Table {
             }
         }
 
-        // Insert into primary storage
-        let row = Row::new(seq_id, columns);
-        self.rows.insert(seq_id, row);
-        self.row_count.fetch_add(1, Ordering::Relaxed);
-
         Ok(seq_id)
     }
 
     /// Pop a single row from the front (FIFO) or back (LIFO).
     /// Uses per-row CAS — no table-level lock.
     pub fn pop_one(&self) -> Option<OwnedRow> {
-        let iter: Box<dyn Iterator<Item = _>> = match self.order {
-            QueueOrder::Fifo => Box::new(self.rows.iter()),
-            QueueOrder::Lifo => {
-                // SkipMap doesn't have rev(), collect and reverse
-                let entries: Vec<_> = self.rows.iter().collect();
-                Box::new(entries.into_iter().rev())
-            }
-            QueueOrder::Priority { .. } => Box::new(self.rows.iter()),
-        };
+        match self.order {
+            QueueOrder::Fifo | QueueOrder::Priority { .. } => self.pop_front(),
+            QueueOrder::Lifo => self.pop_back(),
+        }
+    }
 
-        for entry in iter {
+    /// Pop from front — O(1) amortized for FIFO.
+    fn pop_front(&self) -> Option<OwnedRow> {
+        while let Some(entry) = self.rows.front() {
             let row = entry.value();
             if row.is_claimed() {
+                // Stale claimed row at front — remove and continue
+                let seq_id = *entry.key();
+                drop(entry);
+                self.rows.remove(&seq_id);
                 continue;
             }
             if row.try_claim() {
                 let owned = row.to_owned_row();
                 self.row_count.fetch_sub(1, Ordering::Relaxed);
-                // Remove from primary storage and indexes
+                self.remove_row(entry.key(), row);
+                return Some(owned);
+            }
+            // CAS lost to another thread — retry from front
+        }
+        None
+    }
+
+    /// Pop from back — O(1) amortized for LIFO.
+    fn pop_back(&self) -> Option<OwnedRow> {
+        while let Some(entry) = self.rows.back() {
+            let row = entry.value();
+            if row.is_claimed() {
+                let seq_id = *entry.key();
+                drop(entry);
+                self.rows.remove(&seq_id);
+                continue;
+            }
+            if row.try_claim() {
+                let owned = row.to_owned_row();
+                self.row_count.fetch_sub(1, Ordering::Relaxed);
                 self.remove_row(entry.key(), row);
                 return Some(owned);
             }

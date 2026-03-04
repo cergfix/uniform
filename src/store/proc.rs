@@ -31,7 +31,7 @@ pub enum ProcType {
 }
 
 impl ProcType {
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_uppercase().as_str() {
             "MIRROR_WRITE" => Some(ProcType::MirrorWrite),
             "MIRROR_ON_READ" => Some(ProcType::MirrorOnRead),

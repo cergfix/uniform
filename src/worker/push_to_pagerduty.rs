@@ -1,4 +1,3 @@
-
 use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 
@@ -20,6 +19,7 @@ pub struct PushToPagerDutyWorker {
 }
 
 impl PushToPagerDutyWorker {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: String,
         table: String,
@@ -82,7 +82,7 @@ impl WorkerLoop for PushToPagerDutyWorker {
             let dedup_key = hex::encode(hasher.finalize());
 
             // Timestamp
-            let timestamp = match row.columns.get("Fb_created") {
+            let timestamp = match row.columns.get("u_created_at") {
                 Some(Value::String(s)) => s.clone(),
                 _ => chrono::Utc::now().to_rfc3339(),
             };
@@ -110,8 +110,7 @@ impl WorkerLoop for PushToPagerDutyWorker {
                 } else {
                     crate::util::template::build_string_template(&self.link_text, &row.columns)
                 };
-                payload["links"] =
-                    serde_json::json!([{"href": link_href, "text": link_text}]);
+                payload["links"] = serde_json::json!([{"href": link_href, "text": link_text}]);
             }
 
             match client
@@ -122,7 +121,8 @@ impl WorkerLoop for PushToPagerDutyWorker {
                 Ok(resp) => {
                     if let Ok(body) = resp.text() {
                         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
-                            if json.get("status") != Some(&serde_json::Value::String("success".into()))
+                            if json.get("status")
+                                != Some(&serde_json::Value::String("success".into()))
                             {
                                 if logging::get_log_level() >= logging::LOG_LEVEL_ERROR {
                                     logging::log(&format!(
@@ -137,10 +137,7 @@ impl WorkerLoop for PushToPagerDutyWorker {
                 }
                 Err(e) => {
                     if logging::get_log_level() >= logging::LOG_LEVEL_ERROR {
-                        logging::log(&format!(
-                            "WORKER {}: HTTP error: {}",
-                            self.config.name, e
-                        ));
+                        logging::log(&format!("WORKER {}: HTTP error: {}", self.config.name, e));
                     }
                     fallback_insert(&self.dest_table, row);
                 }

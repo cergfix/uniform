@@ -1,4 +1,4 @@
 pub mod constants;
-pub mod protocol;
 pub mod handler;
+pub mod protocol;
 pub mod resultset;

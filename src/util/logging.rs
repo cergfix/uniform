@@ -41,10 +41,7 @@ pub fn get_log_level_from_string(level: &str) -> i32 {
 }
 
 pub fn is_valid_log_level_string(level: &str) -> bool {
-    matches!(
-        level.to_uppercase().as_str(),
-        "CRIT" | "ERROR" | "DEBUG"
-    )
+    matches!(level.to_uppercase().as_str(), "CRIT" | "ERROR" | "DEBUG")
 }
 
 pub fn set_log_dest(dest: &str) -> String {
@@ -71,11 +68,7 @@ pub fn log(s: &str) {
 
     // Debug always goes to stdout
     if get_log_level() == LOG_LEVEL_DEBUG {
-        let formatted = format!(
-            "{} - {}",
-            timestamp.format("%Y-%m-%dT%H:%M:%S%.3f%:z"),
-            msg
-        );
+        let formatted = format!("{} - {}", timestamp.format("%Y-%m-%dT%H:%M:%S%.3f%:z"), msg);
         println!("{}", formatted);
     }
 
@@ -91,7 +84,7 @@ pub fn log(s: &str) {
         if let Some(table) = registry::get_table(&dest) {
             let mut columns = std::collections::HashMap::new();
             columns.insert(
-                "Fb_created".to_string(),
+                "u_created_at".to_string(),
                 Value::String(timestamp.format("%Y-%m-%dT%H:%M:%S%.3f%:z").to_string()),
             );
             columns.insert("Message".to_string(), Value::String(msg));

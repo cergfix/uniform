@@ -1,3 +1,4 @@
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
 use crate::server::mysql::protocol;
@@ -13,6 +14,7 @@ pub async fn write_result_set(
         // Send OK with zero rows
         let ok = protocol::build_ok_packet(0, 0);
         protocol::write_packet(stream, seq_id, &ok).await?;
+        stream.flush().await.map_err(|e| format!("flush: {}", e))?;
         return Ok(());
     }
 
@@ -26,34 +28,44 @@ pub async fn write_result_set(
         }
     }
 
-    // 1. Column count packet
+    // Build all packets into a single buffer
     let mut buf = Vec::new();
-    protocol::write_length_encoded_int(&mut buf, column_names.len() as u64);
-    protocol::write_packet(stream, seq_id, &buf).await?;
+
+    // 1. Column count packet
+    let mut col_count = Vec::new();
+    protocol::write_length_encoded_int(&mut col_count, column_names.len() as u64);
+    protocol::append_packet(&mut buf, seq_id, &col_count);
     seq_id = seq_id.wrapping_add(1);
 
     // 2. Column definition packets
     for col_name in &column_names {
         let col_def = build_column_definition(col_name);
-        protocol::write_packet(stream, seq_id, &col_def).await?;
+        protocol::append_packet(&mut buf, seq_id, &col_def);
         seq_id = seq_id.wrapping_add(1);
     }
 
     // 3. EOF packet (after column definitions)
     let eof = protocol::build_eof_packet();
-    protocol::write_packet(stream, seq_id, &eof).await?;
+    protocol::append_packet(&mut buf, seq_id, &eof);
     seq_id = seq_id.wrapping_add(1);
 
     // 4. Row data packets
     for row in rows {
         let row_data = build_row_data(row, &column_names);
-        protocol::write_packet(stream, seq_id, &row_data).await?;
+        protocol::append_packet(&mut buf, seq_id, &row_data);
         seq_id = seq_id.wrapping_add(1);
     }
 
     // 5. EOF packet (after rows)
     let eof = protocol::build_eof_packet();
-    protocol::write_packet(stream, seq_id, &eof).await?;
+    protocol::append_packet(&mut buf, seq_id, &eof);
+
+    // Single write + flush
+    stream
+        .write_all(&buf)
+        .await
+        .map_err(|e| format!("write result set: {}", e))?;
+    stream.flush().await.map_err(|e| format!("flush: {}", e))?;
 
     Ok(())
 }

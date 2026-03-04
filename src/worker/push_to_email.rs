@@ -1,7 +1,8 @@
-
 use lettre::message::{header::ContentType, Mailbox, MultiPart, SinglePart};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{Message, SmtpTransport, Transport};
+
+use tokio::sync::watch;
 
 use crate::config::vars;
 use crate::types::row::OwnedRow;
@@ -26,6 +27,57 @@ pub struct PushToEmailWorker {
     pub gzip: bool,
     pub text_only: bool,
     pub encrypt_key: String,
+}
+
+impl PushToEmailWorker {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        name: String,
+        table: String,
+        query: String,
+        dest_table: String,
+        to: String,
+        from: String,
+        from_name: String,
+        subject: String,
+        text: String,
+        smtp_host: String,
+        smtp_port: u16,
+        smtp_user: String,
+        smtp_password: String,
+        gzip: bool,
+        text_only: bool,
+        encrypt_key: String,
+        frequency_ms: u64,
+        burst: i32,
+        max_runs: i64,
+        terminator: watch::Receiver<bool>,
+    ) -> Self {
+        PushToEmailWorker {
+            config: WorkerConfig {
+                name,
+                table,
+                frequency_ms,
+                burst,
+                max_runs,
+                terminator,
+            },
+            query,
+            dest_table,
+            to,
+            from,
+            from_name,
+            subject,
+            text,
+            smtp_host,
+            smtp_port,
+            smtp_user,
+            smtp_password,
+            gzip,
+            text_only,
+            encrypt_key,
+        }
+    }
 }
 
 impl WorkerLoop for PushToEmailWorker {
@@ -142,10 +194,7 @@ impl WorkerLoop for PushToEmailWorker {
             }
             Err(e) => {
                 if logging::get_log_level() >= logging::LOG_LEVEL_ERROR {
-                    logging::log(&format!(
-                        "WORKER {}: SMTP error: {}",
-                        self.config.name, e
-                    ));
+                    logging::log(&format!("WORKER {}: SMTP error: {}", self.config.name, e));
                 }
                 // Fallback
                 if !self.dest_table.is_empty() {

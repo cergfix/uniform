@@ -8,18 +8,19 @@ use crate::util::logging;
 pub fn publish_server_latency_probe(server: &Arc<Server>, value: Duration, request_id: &str) {
     let value_ms = value.as_secs_f64() * 1000.0;
 
-    if server.latency_target_ms > -1.0 && value_ms >= server.latency_target_ms {
-        if logging::get_log_level() >= logging::LOG_LEVEL_CRIT {
-            logging::log(&format!(
-                "WARNING! Server request latency (server={}, fb_id={}) is higher than selected target threshold ({} ms): {:.3} ms",
+    if server.latency_target_ms > -1.0
+        && value_ms >= server.latency_target_ms
+        && logging::get_log_level() >= logging::LOG_LEVEL_CRIT
+    {
+        logging::log(&format!(
+                "WARNING! Server request latency (server={}, u_id={}) is higher than selected target threshold ({} ms): {:.3} ms",
                 server.name, request_id, server.latency_target_ms, value_ms
             ));
-        }
     }
 
     if logging::get_log_level() >= logging::LOG_LEVEL_DEBUG {
         logging::log(&format!(
-            "Server request latency (server={}, fb_id={}): {:.3} ms",
+            "Server request latency (server={}, u_id={}): {:.3} ms",
             server.name, request_id, value_ms
         ));
     }
@@ -34,13 +35,11 @@ pub fn publish_worker_latency_probe(
 ) {
     let value_ms = value.as_secs_f64() * 1000.0;
 
-    if stage == 1 {
-        if logging::get_log_level() >= logging::LOG_LEVEL_DEBUG {
-            logging::log(&format!(
-                "Worker wait (long poll) time (worker={}): {:.3} ms",
-                worker_name, value_ms
-            ));
-        }
+    if stage == 1 && logging::get_log_level() >= logging::LOG_LEVEL_DEBUG {
+        logging::log(&format!(
+            "Worker wait (long poll) time (worker={}): {:.3} ms",
+            worker_name, value_ms
+        ));
     }
 
     if stage == 2 {
@@ -52,13 +51,14 @@ pub fn publish_worker_latency_probe(
         }
 
         if let Some(target) = latency_target_ms {
-            if target > -1.0 && value_ms >= target {
-                if logging::get_log_level() >= logging::LOG_LEVEL_CRIT {
-                    logging::log(&format!(
+            if target > -1.0
+                && value_ms >= target
+                && logging::get_log_level() >= logging::LOG_LEVEL_CRIT
+            {
+                logging::log(&format!(
                         "WARNING! Worker processing (work) time (worker={}) is higher than selected target threshold ({} ms): {:.3} ms",
                         worker_name, target, value_ms
                     ));
-                }
             }
         }
     }

@@ -21,9 +21,6 @@ async fn main() {
     println!();
     println!("{}", vars::COPYRIGHT);
     println!();
-    println!("Knowledge base: {}", vars::KNOWLEDGE_BASE_URL);
-    println!("Support: {}", vars::CONTACT);
-    println!("Web: {}", vars::WEB_URL);
 
     if !vars::client().is_empty() {
         println!();
@@ -42,15 +39,16 @@ async fn main() {
     // Set up shutdown signal handler
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
 
+    // Store in global so Redis SHUTDOWN command can trigger it
+    *registry::SHUTDOWN_TX.lock() = Some(shutdown_tx.clone());
+
     // Signal handler
     let shutdown_tx_clone = shutdown_tx.clone();
     tokio::spawn(async move {
-        let mut sigterm =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("Failed to set up SIGTERM handler");
-        let mut sighup =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
-                .expect("Failed to set up SIGHUP handler");
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("Failed to set up SIGTERM handler");
+        let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+            .expect("Failed to set up SIGHUP handler");
 
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
@@ -65,9 +63,13 @@ async fn main() {
         }
     });
 
-    // Start stdin REPL in a background thread (stdin is blocking)
+    // Start stdin REPL in a background thread (stdin is blocking).
+    // Pass a handle to the Tokio runtime so commands like CREATE SERVER
+    // can spawn async tasks.
     let shutdown_tx_stdin = shutdown_tx.clone();
+    let rt_handle = tokio::runtime::Handle::current();
     std::thread::spawn(move || {
+        let _guard = rt_handle.enter();
         stdin_routine(shutdown_tx_stdin);
     });
 

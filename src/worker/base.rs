@@ -67,10 +67,7 @@ pub async fn run_worker_loop<W: WorkerLoop>(worker: Arc<W>) {
                     }
                     Err(e) => {
                         if logging::get_log_level() >= logging::LOG_LEVEL_ERROR {
-                            logging::log(&format!(
-                                "WORKER {}: error: {}",
-                                config.name, e
-                            ));
+                            logging::log(&format!("WORKER {}: error: {}", config.name, e));
                         }
                     }
                 }

@@ -1,4 +1,3 @@
-
 use tokio::sync::watch;
 
 use crate::types::row::OwnedRow;
@@ -17,6 +16,7 @@ pub struct PushToSlackWorker {
 }
 
 impl PushToSlackWorker {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: String,
         table: String,
@@ -66,11 +66,11 @@ impl WorkerLoop for PushToSlackWorker {
                     self.token, self.channel, encoded
                 )
             } else {
-                let fb_id = match row.columns.get("Fb_id") {
+                let row_id = match row.columns.get("u_id") {
                     Some(crate::types::value::Value::String(s)) => s.clone(),
                     _ => "unknown".into(),
                 };
-                let filename = format!("{}-{}.json", self.config.name, fb_id);
+                let filename = format!("{}-{}.json", self.config.name, row_id);
                 let encoded_content = urlencoding::encode(&json_str);
                 format!(
                     "https://www.slack.com/api/files.upload?token={}&channels={}&content={}&filename={}",
@@ -96,10 +96,7 @@ impl WorkerLoop for PushToSlackWorker {
                 }
                 Err(e) => {
                     if logging::get_log_level() >= logging::LOG_LEVEL_ERROR {
-                        logging::log(&format!(
-                            "WORKER {}: HTTP error: {}",
-                            self.config.name, e
-                        ));
+                        logging::log(&format!("WORKER {}: HTTP error: {}", self.config.name, e));
                     }
                     fallback_insert(&self.dest_table, row);
                 }

@@ -1,0 +1,3 @@
+CREATE TABLE IF NOT EXISTS push_dest (u_id VARCHAR(255), msg VARCHAR(255), num VARCHAR(255));
+CREATE TABLE IF NOT EXISTS pull_src (id INT AUTO_INCREMENT PRIMARY KEY, msg VARCHAR(255));
+INSERT INTO pull_src (msg) VALUES ('pulled_row_1'),('pulled_row_2');

@@ -17,23 +17,33 @@ pub struct Row {
 }
 
 impl Row {
-    /// Create a new row with auto-generated Fb_id and Fb_created.
+    /// Create a new row with auto-generated u_id and u_created_at.
     pub fn new(seq_id: u64, mut columns: HashMap<String, Value>) -> Self {
         let now = Utc::now();
-        let fb_id = Uuid::new_v4().to_string();
-        let fb_created = now.format("%Y-%m-%dT%H:%M:%S%.3f%:z").to_string();
+        let row_id = Uuid::new_v4().to_string();
+        let row_created = now.format("%Y-%m-%dT%H:%M:%S%.3f%:z").to_string();
 
         columns
-            .entry("Fb_id".to_string())
-            .or_insert_with(|| Value::String(fb_id));
+            .entry("u_id".to_string())
+            .or_insert_with(|| Value::String(row_id));
         columns
-            .entry("Fb_created".to_string())
-            .or_insert_with(|| Value::String(fb_created));
+            .entry("u_created_at".to_string())
+            .or_insert_with(|| Value::String(row_created));
 
         Row {
             seq_id,
             columns,
             created: now,
+            claimed: AtomicBool::new(false),
+        }
+    }
+
+    /// Create a row from pre-built columns (no auto-generated u_id / u_created_at).
+    pub fn from_raw(seq_id: u64, columns: HashMap<String, Value>, created: DateTime<Utc>) -> Self {
+        Row {
+            seq_id,
+            columns,
+            created,
             claimed: AtomicBool::new(false),
         }
     }
@@ -81,16 +91,16 @@ pub struct OwnedRow {
 }
 
 impl OwnedRow {
-    /// Create a new owned row with auto-generated Fb_id and Fb_created.
+    /// Create a new owned row with auto-generated u_id and u_created_at.
     pub fn new() -> Self {
         let now = Utc::now();
         let mut columns = HashMap::new();
         columns.insert(
-            "Fb_id".to_string(),
+            "u_id".to_string(),
             Value::String(Uuid::new_v4().to_string()),
         );
         columns.insert(
-            "Fb_created".to_string(),
+            "u_created_at".to_string(),
             Value::String(now.format("%Y-%m-%dT%H:%M:%S%.3f%:z").to_string()),
         );
         OwnedRow {
@@ -156,7 +166,7 @@ impl Default for OwnedRow {
     }
 }
 
-/// Generate a new Fb_id (UUID v4).
-pub fn generate_fb_id() -> String {
+/// Generate a new u_id (UUID v4).
+pub fn generate_u_id() -> String {
     Uuid::new_v4().to_string()
 }

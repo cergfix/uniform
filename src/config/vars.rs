@@ -1,15 +1,13 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use parking_lot::RwLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub const APP_NAME: &str = "Uniform";
-pub const KNOWLEDGE_BASE_URL: &str = "";
-pub const COPYRIGHT: &str = "Copyright (c) 2018 - 2026 Uniform contributors. Licensed under Apache-2.0.";
-pub const CONTACT: &str = "";
-pub const WEB_URL: &str = "";
+pub const COPYRIGHT: &str =
+    "Copyright (c) 2018 - 2026 Uniform contributors. Licensed under Apache-2.0.";
 
 // Injected at build time via env vars, or defaults
 pub fn version() -> &'static str {
-    option_env!("UNIFORM_VERSION").unwrap_or("2.0.0")
+    option_env!("UNIFORM_VERSION").unwrap_or("0.9.0")
 }
 
 pub fn client() -> &'static str {

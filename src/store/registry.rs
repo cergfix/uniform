@@ -4,6 +4,7 @@ use dashmap::DashMap;
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 
+use crate::server::connection::Connection;
 use crate::store::proc::Proc;
 use crate::store::table::Table;
 use crate::store::worker::Worker;
@@ -18,7 +19,7 @@ pub enum ServerProtocol {
 }
 
 impl ServerProtocol {
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_uppercase().as_str() {
             "REDIS" => Some(ServerProtocol::Redis),
             "MYSQL" => Some(ServerProtocol::MySQL),
@@ -67,6 +68,9 @@ pub struct Server {
 
     pub connection_count: std::sync::atomic::AtomicI64,
 
+    /// Active connections keyed by remote address.
+    pub connections: DashMap<String, Arc<tokio::sync::Mutex<Connection>>>,
+
     /// Handle to the TCP listener task (for shutdown).
     pub listener_handle: parking_lot::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
@@ -101,6 +105,7 @@ impl Server {
             latency_target_ms: -1.0,
             last_insert_id: parking_lot::Mutex::new(String::new()),
             connection_count: std::sync::atomic::AtomicI64::new(0),
+            connections: DashMap::new(),
             listener_handle: parking_lot::Mutex::new(None),
         }
     }
@@ -129,6 +134,10 @@ pub static WORKERS: Lazy<DashMap<String, Arc<Worker>>> = Lazy::new(DashMap::new)
 
 /// Global proc list (protected by RwLock for concurrent reads, exclusive writes).
 pub static PROCS: Lazy<RwLock<Vec<Proc>>> = Lazy::new(|| RwLock::new(Vec::new()));
+
+/// Global shutdown sender — set once in main(), used by Redis SHUTDOWN command.
+pub static SHUTDOWN_TX: Lazy<parking_lot::Mutex<Option<tokio::sync::watch::Sender<bool>>>> =
+    Lazy::new(|| parking_lot::Mutex::new(None));
 
 // ---------- Lookup helpers ----------
 

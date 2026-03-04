@@ -19,7 +19,7 @@ pub enum WorkerClass {
 }
 
 impl WorkerClass {
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_uppercase().as_str() {
             "EXEC_QUERY" => Some(WorkerClass::ExecQuery),
             "BUFFER_APPL" => Some(WorkerClass::BufferAppl),
