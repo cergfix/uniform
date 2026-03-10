@@ -22,12 +22,6 @@ async fn main() {
     println!("{}", vars::COPYRIGHT);
     println!();
 
-    if !vars::client().is_empty() {
-        println!();
-        println!("Build association: {}", vars::client());
-        println!();
-    }
-
     println!("- - -");
     println!();
 

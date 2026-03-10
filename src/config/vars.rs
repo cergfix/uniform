@@ -10,10 +10,6 @@ pub fn version() -> &'static str {
     option_env!("UNIFORM_VERSION").unwrap_or("0.9.0")
 }
 
-pub fn client() -> &'static str {
-    option_env!("UNIFORM_CLIENT").unwrap_or("")
-}
-
 static WORKERS_FORCE_SHUTDOWN: AtomicBool = AtomicBool::new(false);
 static PERSIST_METADATA: AtomicBool = AtomicBool::new(false);
 
